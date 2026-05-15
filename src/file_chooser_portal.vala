@@ -27,6 +27,7 @@ namespace Singularity.Portal {
                 title != "" ? title : "Open File",
                 _get_bool_option(options, "multiple"),
                 false,
+                null,
                 results
             );
         }
@@ -46,6 +47,7 @@ namespace Singularity.Portal {
                 title != "" ? title : "Save File",
                 false,
                 true,
+                _get_string_option(options, "current_name"),
                 results
             );
         }
@@ -65,6 +67,7 @@ namespace Singularity.Portal {
                 title != "" ? title : "Save Files",
                 false,
                 true,
+                _get_string_option(options, "current_name"),
                 results
             );
         }
@@ -74,10 +77,18 @@ namespace Singularity.Portal {
             return val != null && val.get_boolean();
         }
 
+        private string? _get_string_option(HashTable<string, Variant> options, string key) {
+            Variant? val = options.get(key);
+            if (val == null) return null;
+            string str = val.get_string();
+            return str != "" ? str : null;
+        }
+
         private async uint32 _run_picker(
             string title,
             bool multiple,
             bool save_mode,
+            string? current_name,
             HashTable<string, Variant> results
         ) {
             int64 ts = GLib.get_real_time();
@@ -117,6 +128,9 @@ namespace Singularity.Portal {
                 }
                 if (save_mode) {
                     argv += "--save";
+                }
+                if (current_name != null) {
+                    argv += "--current-name=" + current_name;
                 }
 
                 var launcher = new SubprocessLauncher(
