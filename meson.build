@@ -82,7 +82,6 @@ sources = files(
   'src/settings.vala',
   'src/screenshot.vala',
   'src/screencast.vala',
-  'src/screencast_source_picker.vala',
   'src/screencast_backend.c',
   'src/file_chooser_portal.vala',
   'src/notification.vala',
@@ -120,4 +119,18 @@ executable('xdg-desktop-portal-singularity',
   vala_args: ['--pkg=gtk4-unix-print'],
   install: true,
   install_dir: get_option('libexecdir')
+)
+
+# Standalone screencast output chooser. Run as a separate process by the
+# portal so GTK is never initialised inside the portal daemon (which would
+# deadlock on its own Settings portal query during Gtk.init).
+executable('singularity-screencast-chooser',
+  sources: files('src/screencast_source_picker.vala', 'src/chooser_main.vala'),
+  dependencies: [
+    gtk4_dep,
+    gio_dep,
+    libsingularity_dep,
+  ],
+  install: true,
+  install_dir: get_option('bindir')
 )

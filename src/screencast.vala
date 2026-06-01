@@ -1,5 +1,4 @@
 using GLib;
-using Gtk;
 
 namespace Singularity.Portal {
 
@@ -71,7 +70,6 @@ namespace Singularity.Portal {
         private HashTable<string, ScreenCastSessionState>    _states;
         private HashTable<string, ScreenCastSession>         _sessions;
         private HashTable<string, uint>                      _session_reg_ids;
-        private bool                                         _gtk_inited = false;
 
         // Impl-portal capability properties read by the xdg-desktop-portal
         // frontend. Without these the frontend can't advertise ScreenCast to
@@ -261,61 +259,43 @@ namespace Singularity.Portal {
             }
         }
 
+        // Run the output chooser as a separate process and read the selected
+        // output from its stdout (empty == cancelled). The chooser must NOT run
+        // in this daemon: GTK's init queries the Settings portal, which loops
+        // back to our own (then-blocked) Settings impl and deadlocks for 25s.
         private async string? _show_source_picker () {
             if (_backend == null) return null;
 
-            // The daemon runs a raw GLib main loop with no GApplication, so GTK
-            // is never initialised and the libsingularity theme is never loaded.
-            // Do both lazily here (guarded) the first time we show the picker;
-            // otherwise the dialog crashes (null GdkDisplay) or renders as
-            // unstyled stock GTK instead of inheriting the Singularity look.
-            if (!_gtk_inited) {
-                Gtk.init ();
-                var gs = Gtk.Settings.get_default ();
-                if (gs != null) gs.gtk_theme_name = "Singularity";
-                var sm = Singularity.Style.StyleManager.get_default ();
-                sm.load_theme ();
-                try {
-                    var ds = new GLib.Settings ("dev.sinty.desktop");
-                    sm.apply_color_scheme (ds.get_boolean ("dark-mode"));
-                    // Resolve the accent exactly like Singularity.Application:
-                    // named swatch, "wallpaper" (sampled from the background),
-                    // or "custom" (a stored hex).
-                    string color_name = ds.get_string ("accent-color");
-                    string? wallpaper_path = null;
-                    if (color_name == "wallpaper") {
-                        string uri = ds.get_string ("background-picture-uri");
-                        if (uri != "")
-                            wallpaper_path = GLib.File.new_for_uri (uri).get_path ();
-                    } else if (color_name == "custom") {
-                        string hex = ds.get_string ("custom-accent-color");
-                        if (hex == null || hex == "") hex = "#3584e4";
-                        color_name = hex;
-                    }
-                    sm.apply_accent_color (color_name, wallpaper_path);
-                } catch (Error e) {
-                    // desktop schema unavailable: keep StyleManager defaults
-                }
-                _gtk_inited = true;
-            }
-
             string[] outputs = screencast_backend_list_outputs (_backend);
-            var picker = new ScreenCastSourcePicker (_app, outputs);
+            string[] argv = { _resolve_chooser_bin () };
+            foreach (unowned string o in outputs) argv += o;
 
-            string? result = null;
-            // Resume this coroutine from the picker's signals instead of
-            // busy-polling on idle.
-            picker.selected.connect ((name) => {
-                result = name;
-                _show_source_picker.callback ();
-            });
-            picker.cancelled.connect (() => {
-                result = null;
-                _show_source_picker.callback ();
-            });
-            picker.open_dialog ();
-            yield;
-            return result;
+            try {
+                var proc = new Subprocess.newv (argv, SubprocessFlags.STDOUT_PIPE);
+                string? out_buf = null;
+                yield proc.communicate_utf8_async (null, null, out out_buf, null);
+                if (out_buf == null) return null;
+                string chosen = out_buf.strip ();
+                return (chosen != "") ? chosen : null;
+            } catch (Error e) {
+                warning ("ScreenCastPortal: failed to launch chooser: %s", e.message);
+                return null;
+            }
+        }
+
+        // Locate singularity-screencast-chooser next to our own executable
+        // (both land in the same bin dir when deployed), falling back to the
+        // install prefix and finally PATH.
+        private string _resolve_chooser_bin () {
+            string bin = "singularity-screencast-chooser";
+            try {
+                string exe = GLib.FileUtils.read_link ("/proc/self/exe");
+                string cand = GLib.Path.build_filename (GLib.Path.get_dirname (exe), bin);
+                if (GLib.FileUtils.test (cand, GLib.FileTest.IS_EXECUTABLE)) return cand;
+            } catch (Error e) { }
+            string opt = "/opt/local/bin/" + bin;
+            if (GLib.FileUtils.test (opt, GLib.FileTest.IS_EXECUTABLE)) return opt;
+            return bin;
         }
     }
 }
