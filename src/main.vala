@@ -115,6 +115,14 @@ namespace Singularity.Portal {
                 _conn.register_object("/org/freedesktop/portal/desktop", dynamic_launcher_portal);
                 screencast_portal = new ScreenCastPortal();
                 screencast_portal.register_on(_conn);
+                // Export the ScreenCast impl interface on the portal object
+                // path. Without this only the manual OpenPipeWireRemote filter
+                // below was reachable, so CreateSession/SelectSources/Start
+                // (and the AvailableSourceTypes/version properties) were never
+                // exposed: the frontend got "No such interface
+                // org.freedesktop.impl.portal.ScreenCast" and Chrome could not
+                // screen-share at all.
+                _conn.register_object("/org/freedesktop/portal/desktop", screencast_portal);
 
                 // OpenPipeWireRemote needs manual fd passing via D-Bus filter
                 _conn.add_filter((connection, message, incoming) => {

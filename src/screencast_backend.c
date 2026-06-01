@@ -79,6 +79,7 @@ struct ScreencastBackend {
     struct pw_stream    *pw_stream;
     struct spa_hook      stream_hook;
     uint32_t             node_id;
+    uint64_t             seq;
     bool                 pw_setup_done;
 
     /* For OpenPipeWireRemote */
@@ -86,7 +87,7 @@ struct ScreencastBackend {
 
     /* Control */
     volatile bool running;
-    GThread      *pw_thread;
+    guint         pw_source_id;
 };
 
 /* ─── Forward declarations ──────────────────────────────────────────────────── */
@@ -243,6 +244,7 @@ static void frame_ready(void *data, struct ext_image_copy_capture_frame_v1 *f) {
 
 static void frame_failed(void *data, struct ext_image_copy_capture_frame_v1 *f, uint32_t reason) {
     ScreencastBackend *b = data;
+    (void) reason;
     if (b->current_frame) {
         ext_image_copy_capture_frame_v1_destroy(b->current_frame);
         b->current_frame = NULL;
@@ -298,6 +300,8 @@ static void session_done(void *data, struct ext_image_copy_capture_session_v1 *s
         if (alloc_shm_buffer(b, b->frame_w, b->frame_h, stride, b->frame_fmt)) {
             if (!b->pw_setup_done) setup_pw_stream(b, b->frame_w, b->frame_h, b->frame_fmt);
             if (b->running) start_next_frame(b);
+        } else {
+            g_message ("screencast: alloc_shm_buffer failed (%ux%u)", b->frame_w, b->frame_h);
         }
     }
 }
@@ -333,6 +337,8 @@ static void start_next_frame(ScreencastBackend *b) {
 static void pw_state_changed(void *data, enum pw_stream_state old,
     enum pw_stream_state state, const char *error) {
     ScreencastBackend *b = data;
+    if (state == PW_STREAM_STATE_ERROR)
+        g_warning ("screencast: pipewire stream error: %s", error ? error : "unknown");
     if ((state == PW_STREAM_STATE_PAUSED || state == PW_STREAM_STATE_STREAMING)
         && b->node_id == SPA_ID_INVALID) {
         uint32_t nid = pw_stream_get_node_id(b->pw_stream);
@@ -362,7 +368,11 @@ static void pw_param_changed(void *data, uint32_t id,
         SPA_PARAM_BUFFERS_size,     SPA_POD_Int((int)sz),
         SPA_PARAM_BUFFERS_stride,   SPA_POD_Int((int)stride),
         SPA_PARAM_BUFFERS_align,    SPA_POD_Int(16),
-        SPA_PARAM_BUFFERS_dataType, SPA_POD_Int(1 << SPA_DATA_MemPtr));
+        // dataType must be a CHOICE (flags), not a plain Int, or PipeWire
+        // rejects the params ("alloc buffers: Invalid argument"). Use MemFd:
+        // the buffers are shared with the consumer process (Chrome), so they
+        // must be a shareable fd, not a process-local MemPtr.
+        SPA_PARAM_BUFFERS_dataType, SPA_POD_CHOICE_FLAGS_Int(1 << SPA_DATA_MemFd));
 
     params[1] = spa_pod_builder_add_object(&pod,
         SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
@@ -380,26 +390,72 @@ static void pw_process(void *data) {
 
     struct spa_data *d = &pwb->buffer->datas[0];
 
-    if (d->data && pthread_mutex_trylock(&b->frame_mutex) == 0) {
-        if (b->frame_ready) {
-            size_t copy_sz = (size_t)b->latest_stride * b->latest_h;
-            if (copy_sz <= d->maxsize) {
-                memcpy(d->data, b->latest_data, copy_sz);
-                d->chunk->offset = 0;
-                d->chunk->stride = (int32_t)b->latest_stride;
-                d->chunk->size   = (uint32_t)copy_sz;
-            }
+    if (pthread_mutex_trylock(&b->frame_mutex) == 0) {
+        size_t copy_sz = (size_t)b->latest_stride * b->latest_h;
+        if (d->data && b->frame_ready && copy_sz <= d->maxsize) {
+            memcpy(d->data, b->latest_data, copy_sz);
+            d->chunk->offset = 0;
+            d->chunk->stride = (int32_t)b->latest_stride;
+            d->chunk->size   = (uint32_t)copy_sz;
         }
         pthread_mutex_unlock(&b->frame_mutex);
     }
 
+    // Fill the buffer header with a timestamp/sequence. Without a valid pts
+    // the consumer (Chrome/WebRTC) drops frames and keeps restarting the
+    // stream, so nothing is ever displayed.
+    struct spa_meta_header *h =
+        spa_buffer_find_meta_data (pwb->buffer, SPA_META_Header, sizeof (*h));
+    if (h) {
+        struct timespec ts;
+        clock_gettime (CLOCK_MONOTONIC, &ts);
+        h->pts        = SPA_TIMESPEC_TO_NSEC (&ts);
+        h->flags      = 0;
+        h->seq        = b->seq++;
+        h->dts_offset = 0;
+    }
+
     pw_stream_queue_buffer(b->pw_stream, pwb);
+}
+
+// With PW_STREAM_FLAG_ALLOC_BUFFERS we provide the buffer memory. Back each
+// buffer with a shared memfd so the consumer (Chrome, another process) can
+// actually read the frames; MAP_BUFFERS gave process-local MemPtr buffers
+// that Chrome could not see, hence the blank stream.
+static void pw_add_buffer(void *data, struct pw_buffer *pwb) {
+    ScreencastBackend *b = data;
+    struct spa_data *d = &pwb->buffer->datas[0];
+    size_t size = (size_t)(b->frame_w * 4) * b->frame_h;
+    int fd = create_shm_fd(size);
+    if (fd < 0) { g_message ("screencast: add_buffer: memfd alloc failed"); return; }
+    void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (ptr == MAP_FAILED) { close(fd); return; }
+    d->type          = SPA_DATA_MemFd;
+    d->flags         = SPA_DATA_FLAG_READABLE;
+    d->fd            = fd;
+    d->mapoffset     = 0;
+    d->maxsize       = (uint32_t)size;
+    d->data          = ptr;
+    d->chunk->offset = 0;
+    d->chunk->stride = (int32_t)(b->frame_w * 4);
+    d->chunk->size   = 0;
+}
+
+static void pw_remove_buffer(void *data, struct pw_buffer *pwb) {
+    (void) data;
+    struct spa_data *d = &pwb->buffer->datas[0];
+    if (d->data && d->maxsize) munmap(d->data, d->maxsize);
+    if ((int) d->fd >= 0) close((int) d->fd);
+    d->data = NULL;
+    d->fd   = -1;
 }
 
 static const struct pw_stream_events stream_events = {
     PW_VERSION_STREAM_EVENTS,
     .state_changed = pw_state_changed,
     .param_changed = pw_param_changed,
+    .add_buffer    = pw_add_buffer,
+    .remove_buffer = pw_remove_buffer,
     .process       = pw_process,
 };
 
@@ -432,22 +488,30 @@ static void setup_pw_stream(ScreencastBackend *b,
     uint8_t pbuf[256];
     struct spa_pod_builder pod = SPA_POD_BUILDER_INIT(pbuf, sizeof(pbuf));
     struct spa_rectangle sz  = { w, h };
-    struct spa_fraction  fps = { 30, 1 };
+    // Variable framerate: a screencast source delivers frames on demand, not
+    // at a fixed rate, so we advertise 0/1 and rely on per-buffer timestamps.
+    // Declaring a fixed 30/1 made the WebRTC consumer expect a steady cadence
+    // and drop our irregularly-timed frames, showing a blank stream.
+    struct spa_fraction  fps     = { 0, 1 };
+    struct spa_fraction  fps_min = { 1, 1 };
+    struct spa_fraction  fps_max = { 60, 1 };
     enum spa_video_format spa_fmt = wl_fmt_to_spa(fmt);
     const struct spa_pod *params[1];
 
     params[0] = spa_pod_builder_add_object(&pod,
         SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
-        SPA_FORMAT_mediaType,       SPA_POD_Id(SPA_MEDIA_TYPE_video),
-        SPA_FORMAT_mediaSubtype,    SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
-        SPA_FORMAT_VIDEO_format,    SPA_POD_Id(spa_fmt),
-        SPA_FORMAT_VIDEO_size,      SPA_POD_Rectangle(&sz),
-        SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&fps));
+        SPA_FORMAT_mediaType,        SPA_POD_Id(SPA_MEDIA_TYPE_video),
+        SPA_FORMAT_mediaSubtype,     SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+        SPA_FORMAT_VIDEO_format,     SPA_POD_Id(spa_fmt),
+        SPA_FORMAT_VIDEO_size,       SPA_POD_Rectangle(&sz),
+        SPA_FORMAT_VIDEO_framerate,  SPA_POD_Fraction(&fps),
+        SPA_FORMAT_VIDEO_maxFramerate,
+            SPA_POD_CHOICE_RANGE_Fraction(&fps_max, &fps_min, &fps_max));
 
     pw_stream_connect(b->pw_stream,
         PW_DIRECTION_OUTPUT,
         PW_ID_ANY,
-        PW_STREAM_FLAG_DRIVER | PW_STREAM_FLAG_MAP_BUFFERS,
+        PW_STREAM_FLAG_ALLOC_BUFFERS,
         params, 1);
 }
 
@@ -467,12 +531,16 @@ static gboolean on_wl_io(int fd, GIOCondition cond, gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
-/* ─── PipeWire thread ───────────────────────────────────────────────────────── */
+/* ─── PipeWire loop driven from the GLib main loop ───────────────────────────── */
 
-static gpointer pw_thread_func(gpointer data) {
+static gboolean on_pw_io(int fd, GIOCondition cond, gpointer data) {
+    (void) fd; (void) cond;
     ScreencastBackend *b = data;
-    pw_main_loop_run(b->pw_loop);
-    return NULL;
+    struct pw_loop *l = pw_main_loop_get_loop(b->pw_loop);
+    pw_loop_enter(l);
+    pw_loop_iterate(l, 0);
+    pw_loop_leave(l);
+    return G_SOURCE_CONTINUE;
 }
 
 /* ─── Public API ────────────────────────────────────────────────────────────── */
@@ -519,7 +587,16 @@ ScreencastBackend *screencast_backend_new(void) {
     b->pw_context = pw_context_new(pw_main_loop_get_loop(b->pw_loop), NULL, 0);
     b->pw_core    = pw_context_connect(b->pw_context, NULL, 0);
 
-    b->pw_thread = g_thread_new("pw-screencast", pw_thread_func, b);
+    // Drive the PipeWire loop from the daemon's GLib main loop instead of a
+    // separate thread. Stream creation/connect then runs on the same thread
+    // that iterates the loop, so the stream negotiates and yields a node id;
+    // the previous cross-thread setup left it stuck before PAUSED.
+    {
+        struct pw_loop *l = pw_main_loop_get_loop(b->pw_loop);
+        b->pw_source_id = g_unix_fd_add(pw_loop_get_fd(l),
+                                        G_IO_IN | G_IO_ERR | G_IO_HUP,
+                                        on_pw_io, b);
+    }
     return b;
 
 fail:
@@ -555,8 +632,7 @@ void screencast_backend_free(ScreencastBackend *b) {
         b->pw_stream = NULL;
     }
 
-    if (b->pw_loop)   pw_main_loop_quit(b->pw_loop);
-    if (b->pw_thread) { g_thread_join(b->pw_thread); b->pw_thread = NULL; }
+    if (b->pw_source_id) { g_source_remove(b->pw_source_id); b->pw_source_id = 0; }
 
     if (b->remote_core) { pw_core_disconnect(b->remote_core); b->remote_core = NULL; }
     if (b->pw_core)     { pw_core_disconnect(b->pw_core);     b->pw_core     = NULL; }
@@ -619,7 +695,19 @@ int screencast_backend_start(ScreencastBackend *b, const char *output_name) {
     }
     pthread_mutex_unlock(&b->outputs_mutex);
 
-    if (!found) return -1;
+    if (!found) {
+        g_message ("screencast: start: output '%s' not found", output_name);
+        return -1;
+    }
+
+    // Tear down any previous capture before starting a new one. Chrome can
+    // create a fresh session without closing the old one (e.g. on retry),
+    // which otherwise leaves dangling frame/session/source/stream objects
+    // and crashes when their events fire.
+    if (b->current_frame)   { ext_image_copy_capture_frame_v1_destroy(b->current_frame);     b->current_frame   = NULL; }
+    if (b->current_session) { ext_image_copy_capture_session_v1_destroy(b->current_session); b->current_session = NULL; }
+    if (b->current_source)  { ext_image_capture_source_v1_destroy(b->current_source);        b->current_source  = NULL; }
+    if (b->pw_stream)       { pw_stream_destroy(b->pw_stream);                                b->pw_stream       = NULL; }
 
     b->capture_output = found->output;
     b->running        = true;
@@ -633,6 +721,11 @@ int screencast_backend_start(ScreencastBackend *b, const char *output_name) {
     b->current_session = ext_image_copy_capture_manager_v1_create_session(
         b->capture_manager, b->current_source, 0);
     ext_image_copy_capture_session_v1_add_listener(b->current_session, &session_listener, b);
+
+    // Flush so the compositor actually receives the create-source/create-session
+    // requests; otherwise it never sends the buffer constraints and the session
+    // never reaches "done", so no PipeWire node is ever produced.
+    wl_display_flush (b->display);
 
     return 0;
 }

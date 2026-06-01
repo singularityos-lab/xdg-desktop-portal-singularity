@@ -1,18 +1,18 @@
 using GLib;
 using Gtk;
-using GtkLayerShell;
 
 namespace Singularity.Portal {
 
     /**
-     * A layer-shell OVERLAY window that lists available Wayland outputs
-     * and lets the user choose one to share via ScreenCast.
+     * Screen-share output chooser. Built on the same Singularity.Shell.ShellDialog
+     * base as the logout / power-confirm dialog, so it looks like a native
+     * Singularity modal (dimmed full-screen overlay with a centered card).
      *
      * Signals:
      *   selected(output_name)  - emitted when the user clicks "Share"
      *   cancelled()            - emitted when the user dismisses the dialog
      */
-    public class ScreenCastSourcePicker : Gtk.Window {
+    public class ScreenCastSourcePicker : Singularity.Shell.ShellDialog {
 
         public signal void selected  (string output_name);
         public signal void cancelled ();
@@ -21,70 +21,65 @@ namespace Singularity.Portal {
         private Gtk.Box   _output_list_box;
 
         public ScreenCastSourcePicker (GLib.Application? app, string[] outputs) {
-            Object (application: app as Gtk.Application);
-            _populate (outputs);
+            Object (
+                application:   app as Gtk.Application,
+                anchor_top:    true,
+                anchor_bottom: true,
+                anchor_left:   true,
+                anchor_right:  true
+            );
+            add_css_class ("screencast-picker-dialog");
+            _build (outputs);
+            hide ();
         }
 
-        construct {
-            GtkLayerShell.init_for_window (this);
-            GtkLayerShell.set_layer (this, GtkLayerShell.Layer.OVERLAY);
-            GtkLayerShell.set_keyboard_mode (this,
-                GtkLayerShell.KeyboardMode.ON_DEMAND);
+        private void _build (string[] outputs) {
+            var card = new Gtk.Box (Gtk.Orientation.VERTICAL, 14);
+            card.halign = Gtk.Align.CENTER;
+            card.valign = Gtk.Align.CENTER;
+            card.add_css_class ("power-card");
+            card.margin_top    = 28;
+            card.margin_bottom = 28;
+            card.margin_start  = 40;
+            card.margin_end    = 40;
+            content_box.append (card);
 
-            add_css_class ("singularity");
-            add_css_class ("singularity-shell");
-            add_css_class ("dialog");
-
-            var root = new Gtk.Box (Gtk.Orientation.VERTICAL, 16);
-            root.margin_top    = 24;
-            root.margin_bottom = 24;
-            root.margin_start  = 24;
-            root.margin_end    = 24;
-            set_child (root);
-
-            // Title row
-            var title_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
             var icon = new Gtk.Image.from_icon_name ("video-display-symbolic");
-            icon.pixel_size = 20;
-            var title_lbl = new Gtk.Label ("Share a Screen");
-            title_lbl.add_css_class ("title-4");
-            title_row.append (icon);
-            title_row.append (title_lbl);
-            root.append (title_row);
+            icon.pixel_size = 48;
+            card.append (icon);
+
+            var title_lbl = new Gtk.Label ("Share your screen");
+            title_lbl.add_css_class ("title-1");
+            card.append (title_lbl);
 
             var subtitle = new Gtk.Label ("Choose a monitor to share");
             subtitle.add_css_class ("dim-label");
-            subtitle.halign = Gtk.Align.START;
-            root.append (subtitle);
+            subtitle.add_css_class ("body");
+            card.append (subtitle);
 
-            // Monitor list
             _output_list_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 8);
-            root.append (_output_list_box);
+            _output_list_box.margin_top = 6;
+            card.append (_output_list_box);
 
-            // Buttons
-            var btn_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 8);
-            btn_row.halign = Gtk.Align.END;
-            root.append (btn_row);
+            var btn_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
+            btn_row.halign = Gtk.Align.CENTER;
+            btn_row.margin_top = 4;
+            card.append (btn_row);
 
             var cancel_btn = new Gtk.Button.with_label ("Cancel");
+            cancel_btn.add_css_class ("pill");
+            cancel_btn.width_request = 128;
             cancel_btn.clicked.connect (_on_cancel_clicked);
             btn_row.append (cancel_btn);
 
             var share_btn = new Gtk.Button.with_label ("Share");
+            share_btn.add_css_class ("pill");
             share_btn.add_css_class ("suggested-action");
+            share_btn.width_request = 128;
             share_btn.clicked.connect (_on_share_clicked);
             btn_row.append (share_btn);
 
-            // Close on Escape
-            var key_ctrl = new Gtk.EventControllerKey ();
-            key_ctrl.key_pressed.connect ((keyval, keycode, state) => {
-                if (keyval == Gdk.Key.Escape) {
-                    _on_cancel_clicked ();
-                    return true;
-                }
-                return false;
-            });
-            ((Gtk.Widget) this).add_controller (key_ctrl);
+            _populate (outputs);
         }
 
         private void _populate (string[] outputs) {
@@ -95,12 +90,9 @@ namespace Singularity.Portal {
                 return;
             }
 
-            // Pre-select first output before building rows
             _chosen_output = outputs[0];
-
-            foreach (unowned string name in outputs) {
+            foreach (unowned string name in outputs)
                 _add_output_row (name);
-            }
         }
 
         private void _add_output_row (string name) {
@@ -137,7 +129,6 @@ namespace Singularity.Portal {
 
         private void _set_chosen (string name) {
             _chosen_output = name;
-            // Sync all checkboxes
             Gtk.Widget? child = _output_list_box.get_first_child ();
             while (child != null) {
                 var row = child as Gtk.Box;
@@ -156,7 +147,7 @@ namespace Singularity.Portal {
 
         private void _on_share_clicked () {
             string? out_name = _chosen_output;
-            close ();
+            close_dialog ();
             if (out_name != null)
                 selected (out_name);
             else
@@ -164,7 +155,7 @@ namespace Singularity.Portal {
         }
 
         private void _on_cancel_clicked () {
-            close ();
+            close_dialog ();
             cancelled ();
         }
     }
