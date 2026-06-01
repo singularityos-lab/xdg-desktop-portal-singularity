@@ -8,6 +8,26 @@ namespace Singularity.Portal {
      * Delegates capture to singularity-screenshot and region selection
      * to singularity-region-picker. Color picking uses hyprpicker.
      */
+    /**
+     * Returns the absolute path of a sibling binary by reading
+     * `/proc/self/exe` and looking next to it; falls back to the bare name
+     * (which the kernel resolves via PATH) when not found.
+     */
+    private static string resolve_companion_bin(string name) {
+        try {
+            string exe = GLib.FileUtils.read_link("/proc/self/exe");
+            string exe_dir = GLib.Path.get_dirname(exe);
+            string candidate = GLib.Path.build_filename(exe_dir, name);
+            if (GLib.FileUtils.test(candidate, GLib.FileTest.IS_EXECUTABLE))
+                return candidate;
+        } catch (Error e) {}
+        // Hard-coded fallback to the canonical install prefix on this distro.
+        string opt = GLib.Path.build_filename("/opt/local/bin", name);
+        if (GLib.FileUtils.test(opt, GLib.FileTest.IS_EXECUTABLE))
+            return opt;
+        return name; // PATH lookup
+    }
+
     [DBus (name = "org.freedesktop.impl.portal.Screenshot")]
     public class ScreenshotPortal : Object {
 
@@ -28,10 +48,11 @@ namespace Singularity.Portal {
                 "singularity-screenshot-%d.png".printf((int)Posix.getpid()));
             message("ScreenshotPortal: interactive=%s path=%s", interactive.to_string(), temp_path);
             try {
-                string bin_dir = GLib.Path.build_filename(
-                    Environment.get_home_dir(), ".local", "singularity", "bin");
-                string screenshot_bin = GLib.Path.build_filename(bin_dir, "singularity-screenshot");
-                string picker_bin = GLib.Path.build_filename(bin_dir, "singularity-region-picker");
+                // Resolve binaries relative to our own executable so we find
+                // them regardless of install prefix (/opt/local/bin,
+                // ~/.local/singularity/bin, ...). Falls back to PATH.
+                string screenshot_bin = resolve_companion_bin("singularity-screenshot");
+                string picker_bin = resolve_companion_bin("singularity-region-picker");
                 string[] argv;
                 if (interactive) {
                     argv = {"bash", "-c",
