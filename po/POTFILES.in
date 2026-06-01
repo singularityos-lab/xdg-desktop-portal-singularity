@@ -1,0 +1,20 @@
+# List of source files containing translatable strings.
+src/access.vala
+src/account.vala
+src/app_chooser.vala
+src/chooser_main.vala
+src/dynamic_launcher.vala
+src/email.vala
+src/file_chooser_portal.vala
+src/inhibit.vala
+src/lockdown.vala
+src/main.vala
+src/notification.vala
+src/open_uri.vala
+src/print.vala
+src/screencast.vala
+src/screencast_source_picker.vala
+src/screenshot.vala
+src/settings.vala
+src/ush.vala
+src/wallpaper.vala

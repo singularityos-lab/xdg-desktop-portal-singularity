@@ -3,6 +3,10 @@ project('xdg-desktop-portal-singularity', ['vala', 'c'],
   meson_version: '>= 0.59.0',
 )
 
+i18n = import('i18n')
+add_project_arguments('-DGETTEXT_PACKAGE="xdg-desktop-portal-singularity"', language: 'c')
+subdir('po')
+
 gnome = import('gnome')
 cc = meson.get_compiler('c')
 valac = meson.get_compiler('vala')

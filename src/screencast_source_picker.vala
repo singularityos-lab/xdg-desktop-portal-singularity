@@ -48,11 +48,11 @@ namespace Singularity.Portal {
             icon.pixel_size = 48;
             card.append (icon);
 
-            var title_lbl = new Gtk.Label ("Share your screen");
+            var title_lbl = new Gtk.Label (_("Share your screen"));
             title_lbl.add_css_class ("title-1");
             card.append (title_lbl);
 
-            var subtitle = new Gtk.Label ("Choose a monitor to share");
+            var subtitle = new Gtk.Label (_("Choose a monitor to share"));
             subtitle.add_css_class ("dim-label");
             subtitle.add_css_class ("body");
             card.append (subtitle);
@@ -66,13 +66,13 @@ namespace Singularity.Portal {
             btn_row.margin_top = 4;
             card.append (btn_row);
 
-            var cancel_btn = new Gtk.Button.with_label ("Cancel");
+            var cancel_btn = new Gtk.Button.with_label (_("Cancel"));
             cancel_btn.add_css_class ("pill");
             cancel_btn.width_request = 128;
             cancel_btn.clicked.connect (_on_cancel_clicked);
             btn_row.append (cancel_btn);
 
-            var share_btn = new Gtk.Button.with_label ("Share");
+            var share_btn = new Gtk.Button.with_label (_("Share"));
             share_btn.add_css_class ("pill");
             share_btn.add_css_class ("suggested-action");
             share_btn.width_request = 128;
@@ -84,7 +84,7 @@ namespace Singularity.Portal {
 
         private void _populate (string[] outputs) {
             if (outputs.length == 0) {
-                var lbl = new Gtk.Label ("No monitors detected");
+                var lbl = new Gtk.Label (_("No monitors detected"));
                 lbl.add_css_class ("dim-label");
                 _output_list_box.append (lbl);
                 return;

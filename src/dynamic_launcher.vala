@@ -52,7 +52,7 @@ namespace Singularity.Portal {
             icon.add_css_class("dim-label");
             box.append(icon);
 
-            var title_lbl = new Label("Install Launcher");
+            var title_lbl = new Label(_("Install Launcher"));
             title_lbl.add_css_class("title-2");
             box.append(title_lbl);
 
@@ -68,14 +68,14 @@ namespace Singularity.Portal {
 
             var name_entry = new Entry();
             name_entry.text = name;
-            name_entry.placeholder_text = "Launcher name";
+            name_entry.placeholder_text = _("Launcher name");
             box.append(name_entry);
 
             var btn_box = new Box(Orientation.HORIZONTAL, 12);
             btn_box.halign = Align.CENTER;
             btn_box.margin_top = 8;
 
-            var cancel_btn = new Button.with_label("Cancel");
+            var cancel_btn = new Button.with_label(_("Cancel"));
             cancel_btn.width_request = 120;
             cancel_btn.clicked.connect(() => {
                 done = true;
@@ -83,7 +83,7 @@ namespace Singularity.Portal {
             });
             btn_box.append(cancel_btn);
 
-            var install_btn = new Button.with_label("Install");
+            var install_btn = new Button.with_label(_("Install"));
             install_btn.width_request = 120;
             install_btn.add_css_class("suggested-action");
             install_btn.clicked.connect(() => {

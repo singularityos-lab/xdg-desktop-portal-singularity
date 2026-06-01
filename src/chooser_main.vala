@@ -68,6 +68,16 @@ namespace Singularity.Portal {
         }
 
         public static int main (string[] argv) {
+        Intl.setlocale(GLib.LocaleCategory.ALL, "");
+        string locale_dir = "/usr/share/locale";
+        try {
+            string exe = GLib.FileUtils.read_link("/proc/self/exe");
+            locale_dir = GLib.Path.build_filename(GLib.Path.get_dirname(GLib.Path.get_dirname(exe)), "share", "locale");
+        } catch (GLib.Error e) { }
+        Intl.bindtextdomain("xdg-desktop-portal-singularity", locale_dir);
+        Intl.bind_textdomain_codeset("xdg-desktop-portal-singularity", "UTF-8");
+        Intl.textdomain("xdg-desktop-portal-singularity");
+
             string[] outs = {};
             for (int i = 1; i < argv.length; i++)
                 outs += argv[i];

@@ -97,7 +97,7 @@ namespace Singularity.Portal {
             scroll.set_child(list);
             box.append(scroll);
 
-            var cancel_btn = new Button.with_label("Cancel");
+            var cancel_btn = new Button.with_label(_("Cancel"));
             cancel_btn.halign = Align.CENTER; cancel_btn.width_request = 120;
             cancel_btn.clicked.connect(() => { done = true; dialog.close_dialog(); });
             box.append(cancel_btn);
@@ -212,7 +212,7 @@ namespace Singularity.Portal {
             scroll.set_child(list);
             box.append(scroll);
 
-            var cancel_btn = new Button.with_label("Cancel");
+            var cancel_btn = new Button.with_label(_("Cancel"));
             cancel_btn.halign = Align.CENTER; cancel_btn.width_request = 120;
             cancel_btn.margin_top = 4;
             cancel_btn.clicked.connect(() => { done = true; dialog.close_dialog(); });
