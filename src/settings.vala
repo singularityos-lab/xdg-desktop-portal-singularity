@@ -108,8 +108,14 @@ namespace Singularity.Portal {
             bool include_gnome_desktop = want_all;
             if (!include_appearance || !include_gnome_desktop) {
                 foreach (var ns in namespaces) {
-                    if (ns == "org.freedesktop.Appearance") include_appearance = true;
-                    if (ns == "org.gnome.desktop.interface") include_gnome_desktop = true;
+                    // Clients query either casing / a glob; match both.
+                    if (ns == "org.freedesktop.Appearance"
+                        || ns == "org.freedesktop.appearance"
+                        || ns == "org.freedesktop.*"
+                        || ns == "org.freedesktop*") include_appearance = true;
+                    if (ns == "org.gnome.desktop.interface"
+                        || ns == "org.gnome.*"
+                        || ns == "org.gnome*") include_gnome_desktop = true;
                 }
             }
 
