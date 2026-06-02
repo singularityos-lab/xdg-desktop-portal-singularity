@@ -31,8 +31,20 @@ namespace Singularity.Portal {
      */
     public class SettingsPortal : Object {
         private GLib.Settings _desktop_settings;
+        // Real org.gnome.desktop.interface settings, proxied so GTK clients that
+        // read interface settings through the portal (the default path on
+        // Wayland) get the full namespace, including icon-theme. Omitting
+        // icon-theme made GTK fall back to hicolor and lose symbolic icons.
+        private GLib.Settings? _iface_settings = null;
         private unowned DBusConnection? _conn;
         private DBusNodeInfo _node_info;
+
+        // org.gnome.desktop.interface keys to proxy verbatim from GSettings.
+        // color-scheme and accent-color are handled separately (derived).
+        private const string[] IFACE_STRING_KEYS = {
+            "gtk-theme", "icon-theme", "cursor-theme", "font-name",
+            "monospace-font-name", "document-font-name"
+        };
 
         private const string IFACE_XML =
             "<node>" +
@@ -58,7 +70,42 @@ namespace Singularity.Portal {
         public SettingsPortal() {
             _desktop_settings = new GLib.Settings("dev.sinty.desktop");
             _desktop_settings.changed.connect(_on_setting_changed);
+            // Bind the real interface settings only if the schema is installed,
+            // so the portal degrades gracefully where it is absent.
+            var src = GLib.SettingsSchemaSource.get_default();
+            if (src != null && src.lookup("org.gnome.desktop.interface", true) != null) {
+                _iface_settings = new GLib.Settings("org.gnome.desktop.interface");
+                _iface_settings.changed.connect(_on_iface_changed);
+            }
             _node_info = new DBusNodeInfo.for_xml(IFACE_XML);
+        }
+
+        // Propagate live changes of proxied interface keys to clients.
+        private void _on_iface_changed(string key) {
+            if (_conn == null || _iface_settings == null) return;
+            if (!(key in IFACE_STRING_KEYS)) return;
+            try {
+                _conn.emit_signal(null,
+                    "/org/freedesktop/portal/desktop",
+                    "org.freedesktop.impl.portal.Settings",
+                    "SettingChanged",
+                    new Variant("(ssv)",
+                        "org.gnome.desktop.interface", key,
+                        new Variant.string(_iface_settings.get_string(key))));
+            } catch (Error e) {
+                warning("SettingsPortal: failed to emit SettingChanged for %s: %s", key, e.message);
+            }
+        }
+
+        // Adds the proxied org.gnome.desktop.interface string keys (icon-theme,
+        // gtk-theme, fonts, ...) to a builder, skipping any the schema lacks.
+        private void _add_iface_string_keys(VariantBuilder inner) {
+            if (_iface_settings == null) return;
+            var schema = _iface_settings.settings_schema;
+            foreach (var key in IFACE_STRING_KEYS) {
+                if (!schema.has_key(key)) continue;
+                inner.add("{sv}", key, new Variant.string(_iface_settings.get_string(key)));
+            }
         }
 
         public uint register_on(DBusConnection connection) throws GLib.Error {
@@ -123,6 +170,11 @@ namespace Singularity.Portal {
                 var inner = new VariantBuilder(new VariantType("a{sv}"));
                 inner.add("{sv}", "color-scheme", new Variant.string(_get_gnome_color_scheme()));
                 inner.add("{sv}", "accent-color", new Variant.string(_get_accent_color()));
+                // Proxy the real interface keys so GTK clients reading this
+                // namespace through the portal (the default on Wayland) get a
+                // complete dict, including icon-theme. Omitting icon-theme made
+                // GTK fall back to hicolor and lose symbolic icons.
+                _add_iface_string_keys(inner);
                 builder.add("{s@a{sv}}", "org.gnome.desktop.interface", inner.end());
             }
             invocation.return_value(new Variant.tuple({ builder.end() }));
@@ -148,6 +200,16 @@ namespace Singularity.Portal {
                 if (key == "accent-color") {
                     invocation.return_value(new Variant.tuple({
                         new Variant.variant(new Variant.string(_get_accent_color()))
+                    }));
+                    return;
+                }
+                // Proxy the real interface string keys (icon-theme, gtk-theme,
+                // fonts, ...) so clients reading them through the portal get the
+                // actual value instead of a NotFound error.
+                if (_iface_settings != null && key in IFACE_STRING_KEYS
+                        && _iface_settings.settings_schema.has_key(key)) {
+                    invocation.return_value(new Variant.tuple({
+                        new Variant.variant(new Variant.string(_iface_settings.get_string(key)))
                     }));
                     return;
                 }
