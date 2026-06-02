@@ -108,7 +108,7 @@ namespace Singularity.Portal {
             bool include_gnome_desktop = want_all;
             if (!include_appearance || !include_gnome_desktop) {
                 foreach (var ns in namespaces) {
-                    if (ns == "org.freedesktop.Appearance") include_appearance = true;
+                    if (ns == "org.freedesktop.appearance") include_appearance = true;
                     if (ns == "org.gnome.desktop.interface") include_gnome_desktop = true;
                 }
             }
@@ -117,7 +117,7 @@ namespace Singularity.Portal {
             if (include_appearance) {
                 var inner = new VariantBuilder(new VariantType("a{sv}"));
                 inner.add("{sv}", "color-scheme", new Variant.uint32(_get_color_scheme()));
-                builder.add("{s@a{sv}}", "org.freedesktop.Appearance", inner.end());
+                builder.add("{s@a{sv}}", "org.freedesktop.appearance", inner.end());
             }
             if (include_gnome_desktop) {
                 var inner = new VariantBuilder(new VariantType("a{sv}"));
@@ -132,7 +132,7 @@ namespace Singularity.Portal {
             string ns, key;
             parameters.get("(ss)", out ns, out key);
 
-            if (ns == "org.freedesktop.Appearance" && key == "color-scheme") {
+            if (ns == "org.freedesktop.appearance" && key == "color-scheme") {
                 invocation.return_value(new Variant.tuple({
                     new Variant.variant(new Variant.uint32(_get_color_scheme()))
                 }));
@@ -165,7 +165,7 @@ namespace Singularity.Portal {
                         "org.freedesktop.impl.portal.Settings",
                         "SettingChanged",
                         new Variant("(ssv)",
-                            "org.freedesktop.Appearance",
+                            "org.freedesktop.appearance",
                             "color-scheme",
                             new Variant.uint32(_get_color_scheme())));
                 } catch (Error e) {
