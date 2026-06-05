@@ -20,6 +20,7 @@ json_dep = dependency('json-glib-1.0')
 gtk4_unix_print_dep = dependency('gtk4-unix-print')
 wayland_client_dep = dependency('wayland-client')
 posix_dep = valac.find_library('posix')
+gtk4_layer_shell_dep = dependency('gtk4-layer-shell-0')
 
 # Pipewire dependency handled via pkg-config to avoid valac issues
 pipewire_cflags = run_command('pkg-config', '--cflags', 'libpipewire-0.3', check: true).stdout().strip().split()
@@ -116,6 +117,7 @@ executable('xdg-desktop-portal-singularity',
     wayland_client_dep,
     posix_dep,
     libsingularity_dep,
+    gtk4_layer_shell_dep,
     cc.find_library('m')
   ],
   c_args: pipewire_cflags,
