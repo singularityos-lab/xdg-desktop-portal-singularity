@@ -87,7 +87,13 @@ namespace Singularity.Portal {
             _session_reg_ids = new HashTable<string, uint>                   (str_hash, str_equal);
             _backend         = screencast_backend_new ();
             if (_backend == null)
-                warning ("ScreenCastPortal: backend init failed (no compositor/PipeWire?)");
+                warning ("ScreenCastPortal: backend not ready at startup, will retry on first request");
+        }
+
+        private void* ensure_backend () {
+            if (_backend == null)
+                _backend = screencast_backend_new ();
+            return _backend;
         }
 
         ~ScreenCastPortal () {
@@ -166,7 +172,7 @@ namespace Singularity.Portal {
             results  = new HashTable<string, Variant> (str_hash, str_equal);
             var state = _states.lookup ((string) session_handle);
 
-            if (state == null || state.output_name == "" || _backend == null) {
+            if (state == null || state.output_name == "" || ensure_backend () == null) {
                 response = 2;
                 return;
             }
@@ -212,7 +218,7 @@ namespace Singularity.Portal {
         [DBus (visible = false)]
         public int open_pipewire_remote_fd (ObjectPath session_handle) throws Error {
             var state = _states.lookup ((string) session_handle);
-            if (state == null || _backend == null)
+            if (state == null || ensure_backend () == null)
                 throw new IOError.FAILED ("ScreenCastPortal: invalid session");
             int raw_fd = screencast_backend_get_pw_fd (_backend);
             if (raw_fd < 0)
@@ -264,7 +270,7 @@ namespace Singularity.Portal {
         // in this daemon: GTK's init queries the Settings portal, which loops
         // back to our own (then-blocked) Settings impl and deadlocks for 25s.
         private async string? _show_source_picker () {
-            if (_backend == null) return null;
+            if (ensure_backend () == null) return null;
 
             string[] outputs = screencast_backend_list_outputs (_backend);
             string[] argv = { _resolve_chooser_bin () };
