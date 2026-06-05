@@ -7,6 +7,7 @@ A backend implementation for xdg-desktop-portal for the [Singularity Desktop Env
 - [Meson](https://mesonbuild.com/) ≥ 1.0
 - [Vala](https://vala.dev/) compiler
 - GTK4
+- gtk4-layer-shell
 - libgee-0.8
 - json-glib-1.0
 - libpipewire-0.3
