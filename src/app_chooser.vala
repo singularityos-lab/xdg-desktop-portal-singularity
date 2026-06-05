@@ -257,13 +257,7 @@ namespace Singularity.Portal {
             try {
                 // Get path from fd
                 string path = "/proc/self/fd/%d".printf(fd.get_fd());
-                char[] buf = new char[4096];
-                ssize_t len = Posix.readlink(path, buf);
-                if (len < 0) {
-                    response = 1;
-                    return;
-                }
-                string real_path = ((string)buf).substring(0, (int)len);
+                string real_path = FileUtils.read_link(path);
                 string uri = File.new_for_path(real_path).get_uri();
                 
                 string? choice = yield open_uri_dialog(uri, title != "" ? title : "Open File");

@@ -5,6 +5,7 @@ project('xdg-desktop-portal-singularity', ['vala', 'c'],
 
 i18n = import('i18n')
 add_project_arguments('-DGETTEXT_PACKAGE="xdg-desktop-portal-singularity"', language: 'c')
+add_project_arguments('-D_GNU_SOURCE', language: 'c')
 subdir('po')
 
 gnome = import('gnome')
