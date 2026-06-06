@@ -36,6 +36,10 @@ namespace Singularity.Portal {
         // Wayland) get the full namespace, including icon-theme. Omitting
         // icon-theme made GTK fall back to hicolor and lose symbolic icons.
         private GLib.Settings? _iface_settings = null;
+        // Real org.gnome.desktop.wm.preferences settings, proxied so sandboxed
+        // GTK clients (flatpaks) read the window button-layout through the
+        // portal. Without it they never see the minimize/maximize preference.
+        private GLib.Settings? _wm_settings = null;
         private unowned DBusConnection? _conn;
         private DBusNodeInfo _node_info;
 
@@ -77,6 +81,10 @@ namespace Singularity.Portal {
                 _iface_settings = new GLib.Settings("org.gnome.desktop.interface");
                 _iface_settings.changed.connect(_on_iface_changed);
             }
+            if (src != null && src.lookup("org.gnome.desktop.wm.preferences", true) != null) {
+                _wm_settings = new GLib.Settings("org.gnome.desktop.wm.preferences");
+                _wm_settings.changed["button-layout"].connect(_on_wm_button_layout_changed);
+            }
             _node_info = new DBusNodeInfo.for_xml(IFACE_XML);
         }
 
@@ -94,6 +102,22 @@ namespace Singularity.Portal {
                         new Variant.string(_iface_settings.get_string(key))));
             } catch (Error e) {
                 warning("SettingsPortal: failed to emit SettingChanged for %s: %s", key, e.message);
+            }
+        }
+
+        // Propagate live changes of the window button-layout to clients.
+        private void _on_wm_button_layout_changed(string key) {
+            if (_conn == null || _wm_settings == null) return;
+            try {
+                _conn.emit_signal(null,
+                    "/org/freedesktop/portal/desktop",
+                    "org.freedesktop.impl.portal.Settings",
+                    "SettingChanged",
+                    new Variant("(ssv)",
+                        "org.gnome.desktop.wm.preferences", "button-layout",
+                        new Variant.string(_wm_settings.get_string("button-layout"))));
+            } catch (Error e) {
+                warning("SettingsPortal: failed to emit SettingChanged for button-layout: %s", e.message);
             }
         }
 
@@ -153,10 +177,12 @@ namespace Singularity.Portal {
             }
             bool include_appearance = want_all;
             bool include_gnome_desktop = want_all;
-            if (!include_appearance || !include_gnome_desktop) {
+            bool include_wm = want_all;
+            if (!include_appearance || !include_gnome_desktop || !include_wm) {
                 foreach (var ns in namespaces) {
                     if (ns == "org.freedesktop.appearance") include_appearance = true;
                     if (ns == "org.gnome.desktop.interface") include_gnome_desktop = true;
+                    if (ns == "org.gnome.desktop.wm.preferences") include_wm = true;
                 }
             }
 
@@ -176,6 +202,13 @@ namespace Singularity.Portal {
                 // GTK fall back to hicolor and lose symbolic icons.
                 _add_iface_string_keys(inner);
                 builder.add("{s@a{sv}}", "org.gnome.desktop.interface", inner.end());
+            }
+            if (include_wm && _wm_settings != null
+                    && _wm_settings.settings_schema.has_key("button-layout")) {
+                var inner = new VariantBuilder(new VariantType("a{sv}"));
+                inner.add("{sv}", "button-layout",
+                    new Variant.string(_wm_settings.get_string("button-layout")));
+                builder.add("{s@a{sv}}", "org.gnome.desktop.wm.preferences", inner.end());
             }
             invocation.return_value(new Variant.tuple({ builder.end() }));
         }
@@ -213,6 +246,14 @@ namespace Singularity.Portal {
                     }));
                     return;
                 }
+            }
+            if (ns == "org.gnome.desktop.wm.preferences" && key == "button-layout"
+                    && _wm_settings != null
+                    && _wm_settings.settings_schema.has_key("button-layout")) {
+                invocation.return_value(new Variant.tuple({
+                    new Variant.variant(new Variant.string(_wm_settings.get_string("button-layout")))
+                }));
+                return;
             }
             invocation.return_error_literal(
                 Quark.from_string("XDGDesktopPortal"), 2, "Setting not found");
