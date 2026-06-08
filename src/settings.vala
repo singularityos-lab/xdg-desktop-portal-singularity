@@ -190,6 +190,7 @@ namespace Singularity.Portal {
             if (include_appearance) {
                 var inner = new VariantBuilder(new VariantType("a{sv}"));
                 inner.add("{sv}", "color-scheme", new Variant.uint32(_get_color_scheme()));
+                inner.add("{sv}", "accent-color", _get_accent_color_variant());
                 builder.add("{s@a{sv}}", "org.freedesktop.appearance", inner.end());
             }
             if (include_gnome_desktop) {
@@ -220,6 +221,12 @@ namespace Singularity.Portal {
             if (ns == "org.freedesktop.appearance" && key == "color-scheme") {
                 invocation.return_value(new Variant.tuple({
                     new Variant.variant(new Variant.uint32(_get_color_scheme()))
+                }));
+                return;
+            }
+            if (ns == "org.freedesktop.appearance" && key == "accent-color") {
+                invocation.return_value(new Variant.tuple({
+                    new Variant.variant(_get_accent_color_variant())
                 }));
                 return;
             }
@@ -287,7 +294,19 @@ namespace Singularity.Portal {
                     warning("SettingsPortal: failed to emit SettingChanged for gnome color-scheme: %s", e.message);
                 }
             }
-            if (key == "accent-color") {
+            if (key == "accent-color" || key == "custom-accent-color") {
+                try {
+                    _conn.emit_signal(null,
+                        "/org/freedesktop/portal/desktop",
+                        "org.freedesktop.impl.portal.Settings",
+                        "SettingChanged",
+                        new Variant("(ssv)",
+                            "org.freedesktop.appearance",
+                            "accent-color",
+                            _get_accent_color_variant()));
+                } catch (Error e) {
+                    warning("SettingsPortal: failed to emit SettingChanged for appearance accent-color: %s", e.message);
+                }
                 try {
                     _conn.emit_signal(null,
                         "/org/freedesktop/portal/desktop",
@@ -318,6 +337,51 @@ namespace Singularity.Portal {
         private string _get_accent_color() {
             string color = _desktop_settings.get_string("accent-color");
             return color == "wallpaper" ? "blue" : color;
+        }
+
+        // Resolve the configured accent to a "#rrggbb" hex string. Named
+        // swatches map to their fixed hex; "wallpaper" reads the resolved hex
+        // the shell stores in custom-accent-color; an explicit hex passes
+        // through. Mirrors the table in libsingularity's StyleManager.
+        private string _resolve_accent_hex() {
+            string c = _desktop_settings.get_string("accent-color");
+            if (c.has_prefix("#") && c.length >= 7) return c;
+            // Both "custom" and "wallpaper" store their resolved hex in
+            // custom-accent-color (the shell writes the sampled wallpaper colour
+            // there too).
+            if (c == "custom" || c == "wallpaper") {
+                string custom = _desktop_settings.get_string("custom-accent-color");
+                return (custom.has_prefix("#") && custom.length >= 7) ? custom : "#3584e4";
+            }
+            switch (c) {
+                case "teal":   return "#2190a4";
+                case "green":  return "#3a944a";
+                case "yellow": return "#e5a50a";
+                case "orange": return "#e66100";
+                case "red":    return "#e01b24";
+                case "pink":   return "#d56199";
+                case "purple": return "#9141ac";
+                case "slate":  return "#787878";
+                default:       return "#3584e4";
+            }
+        }
+
+        private static int _hex_nibble(char c) {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return 0;
+        }
+
+        // The org.freedesktop.appearance accent-color value: a (ddd) tuple of
+        // red, green, blue as doubles in [0, 1]. This is what GTK4/libadwaita
+        // apps read to follow the system accent.
+        private Variant _get_accent_color_variant() {
+            string hex = _resolve_accent_hex();
+            double r = (_hex_nibble(hex[1]) * 16 + _hex_nibble(hex[2])) / 255.0;
+            double g = (_hex_nibble(hex[3]) * 16 + _hex_nibble(hex[4])) / 255.0;
+            double b = (_hex_nibble(hex[5]) * 16 + _hex_nibble(hex[6])) / 255.0;
+            return new Variant("(ddd)", r, g, b);
         }
     }
 }
