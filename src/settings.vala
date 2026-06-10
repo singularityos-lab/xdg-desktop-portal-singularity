@@ -162,6 +162,19 @@ namespace Singularity.Portal {
             return null;
         }
 
+        // The Settings portal treats a requested namespace ending in '*' as a
+        // prefix glob: GTK4 queries ReadAll with "org.gnome.*", expecting every
+        // org.gnome.* namespace back. Exact string matching alone dropped
+        // button-layout, gtk-theme and icon-theme from the cold-start reply, so
+        // fresh GTK apps fell back to GTK defaults (close-only titlebar).
+        private static bool ns_matches(string pattern, string target) {
+            if (pattern == target) return true;
+            if (pattern.has_suffix("*")) {
+                return target.has_prefix(pattern.substring(0, pattern.length - 1));
+            }
+            return false;
+        }
+
         private void _handle_read_all(Variant parameters, DBusMethodInvocation invocation) {
             string[] namespaces = {};
             var ns_variant = parameters.get_child_value(0);
@@ -180,9 +193,9 @@ namespace Singularity.Portal {
             bool include_wm = want_all;
             if (!include_appearance || !include_gnome_desktop || !include_wm) {
                 foreach (var ns in namespaces) {
-                    if (ns == "org.freedesktop.appearance") include_appearance = true;
-                    if (ns == "org.gnome.desktop.interface") include_gnome_desktop = true;
-                    if (ns == "org.gnome.desktop.wm.preferences") include_wm = true;
+                    if (ns_matches(ns, "org.freedesktop.appearance")) include_appearance = true;
+                    if (ns_matches(ns, "org.gnome.desktop.interface")) include_gnome_desktop = true;
+                    if (ns_matches(ns, "org.gnome.desktop.wm.preferences")) include_wm = true;
                 }
             }
 
