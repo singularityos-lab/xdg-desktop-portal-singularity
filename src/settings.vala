@@ -346,10 +346,30 @@ namespace Singularity.Portal {
             return dark ? "prefer-dark" : "default";
         }
 
-        // Falls back to "blue" for wallpaper-derived colors
         private string _get_accent_color() {
             string color = _desktop_settings.get_string("accent-color");
-            return color == "wallpaper" ? "blue" : color;
+            if (color == "wallpaper" || color == "custom" || color.has_prefix("#"))
+                return _nearest_named_accent(_resolve_accent_hex());
+            return color;
+        }
+
+        private string _nearest_named_accent(string hex) {
+            if (!(hex.has_prefix("#") && hex.length >= 7)) return "blue";
+            int r = _hex_nibble(hex[1]) * 16 + _hex_nibble(hex[2]);
+            int g = _hex_nibble(hex[3]) * 16 + _hex_nibble(hex[4]);
+            int b = _hex_nibble(hex[5]) * 16 + _hex_nibble(hex[6]);
+            string[] names = { "blue", "teal", "green", "yellow", "orange", "red", "pink", "purple", "slate" };
+            string[] hexes = { "#3584e4", "#2190a4", "#3a944a", "#e5a50a", "#e66100", "#e01b24", "#d56199", "#9141ac", "#787878" };
+            string best = "blue";
+            long best_d = long.MAX;
+            for (int i = 0; i < names.length; i++) {
+                int rr = _hex_nibble(hexes[i][1]) * 16 + _hex_nibble(hexes[i][2]);
+                int gg = _hex_nibble(hexes[i][3]) * 16 + _hex_nibble(hexes[i][4]);
+                int bb = _hex_nibble(hexes[i][5]) * 16 + _hex_nibble(hexes[i][6]);
+                long d = (long)(r - rr) * (r - rr) + (long)(g - gg) * (g - gg) + (long)(b - bb) * (b - bb);
+                if (d < best_d) { best_d = d; best = names[i]; }
+            }
+            return best;
         }
 
         // Resolve the configured accent to a "#rrggbb" hex string. Named
