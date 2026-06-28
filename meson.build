@@ -136,6 +136,7 @@ executable('singularity-screencast-chooser',
   dependencies: [
     gtk4_dep,
     gio_dep,
+    json_dep,
     libsingularity_dep,
   ],
   install: true,
