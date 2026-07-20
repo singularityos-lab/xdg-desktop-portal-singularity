@@ -74,6 +74,9 @@ namespace Singularity.Portal {
         public SettingsPortal() {
             _desktop_settings = new GLib.Settings("dev.sinty.desktop");
             _desktop_settings.changed.connect(_on_setting_changed);
+            // The color-scheme follows the resolved app tone (theme-mode plus the
+            // adaptive schedule), so re-emit whenever the resolver reports a change.
+            Singularity.Style.ThemeMode.get_default().changed.connect(_emit_color_scheme_changed);
             // Bind the real interface settings only if the schema is installed,
             // so the portal degrades gracefully where it is absent.
             var src = GLib.SettingsSchemaSource.get_default();
@@ -279,34 +282,39 @@ namespace Singularity.Portal {
                 Quark.from_string("XDGDesktopPortal"), 2, "Setting not found");
         }
 
+        // Emits the appearance and gnome-interface color-scheme SettingChanged
+        // signals. Driven by ThemeMode.changed (covering both GSettings edits
+        // and the adaptive schedule timer flips), not by a single key change.
+        private void _emit_color_scheme_changed() {
+            if (_conn == null) return;
+            try {
+                _conn.emit_signal(null,
+                    "/org/freedesktop/portal/desktop",
+                    "org.freedesktop.impl.portal.Settings",
+                    "SettingChanged",
+                    new Variant("(ssv)",
+                        "org.freedesktop.appearance",
+                        "color-scheme",
+                        new Variant.uint32(_get_color_scheme())));
+            } catch (Error e) {
+                warning("SettingsPortal: failed to emit SettingChanged for color-scheme: %s", e.message);
+            }
+            try {
+                _conn.emit_signal(null,
+                    "/org/freedesktop/portal/desktop",
+                    "org.freedesktop.impl.portal.Settings",
+                    "SettingChanged",
+                    new Variant("(ssv)",
+                        "org.gnome.desktop.interface",
+                        "color-scheme",
+                        new Variant.string(_get_gnome_color_scheme())));
+            } catch (Error e) {
+                warning("SettingsPortal: failed to emit SettingChanged for gnome color-scheme: %s", e.message);
+            }
+        }
+
         private void _on_setting_changed(string key) {
             if (_conn == null) return;
-            if (key == "dark-mode") {
-                try {
-                    _conn.emit_signal(null,
-                        "/org/freedesktop/portal/desktop",
-                        "org.freedesktop.impl.portal.Settings",
-                        "SettingChanged",
-                        new Variant("(ssv)",
-                            "org.freedesktop.appearance",
-                            "color-scheme",
-                            new Variant.uint32(_get_color_scheme())));
-                } catch (Error e) {
-                    warning("SettingsPortal: failed to emit SettingChanged for color-scheme: %s", e.message);
-                }
-                try {
-                    _conn.emit_signal(null,
-                        "/org/freedesktop/portal/desktop",
-                        "org.freedesktop.impl.portal.Settings",
-                        "SettingChanged",
-                        new Variant("(ssv)",
-                            "org.gnome.desktop.interface",
-                            "color-scheme",
-                            new Variant.string(_get_gnome_color_scheme())));
-                } catch (Error e) {
-                    warning("SettingsPortal: failed to emit SettingChanged for gnome color-scheme: %s", e.message);
-                }
-            }
             if (key == "accent-color" || key == "custom-accent-color") {
                 try {
                     _conn.emit_signal(null,
@@ -336,13 +344,13 @@ namespace Singularity.Portal {
         }
 
         private uint32 _get_color_scheme() {
-            bool dark = _desktop_settings.get_boolean("dark-mode");
+            bool dark = Singularity.Style.ThemeMode.get_default().app_dark();
             return dark ? 1 : 2;
         }
 
         // org.gnome.desktop.interface uses "prefer-dark"/"default" strings
         private string _get_gnome_color_scheme() {
-            bool dark = _desktop_settings.get_boolean("dark-mode");
+            bool dark = Singularity.Style.ThemeMode.get_default().app_dark();
             return dark ? "prefer-dark" : "default";
         }
 

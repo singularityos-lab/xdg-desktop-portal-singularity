@@ -56,7 +56,7 @@ namespace Singularity.Portal {
                 });
 
             _ush_bus_owner_id = Bus.own_name(BusType.SESSION,
-                "io.github.mirkobrombin.ush.Portal",
+                "io.github.singularityos_lab.ush.Portal",
                 BusNameOwnerFlags.NONE,
                 (conn) => {
                     // Register the ush portal object on the main portal connection,
@@ -65,7 +65,7 @@ namespace Singularity.Portal {
                     // the GDK/Wayland display.
                     try {
                         ush_portal = new UshPortal();
-                        _conn.register_object("/io/github/mirkobrombin/ush/Portal", ush_portal);
+                        _conn.register_object("/io/github/singularityos_lab/ush/Portal", ush_portal);
                         message("PortalApplication: ush portal registered.");
                     } catch (GLib.Error e) {
                         warning("PortalApplication: failed to register ush portal: %s", e.message);
