@@ -27,7 +27,10 @@ namespace Singularity.Portal {
                 title != "" ? title : "Open File",
                 _get_bool_option(options, "multiple"),
                 false,
+                _get_bool_option(options, "directory"),
                 null,
+                _get_bytestring_option(options, "current_folder"),
+                _get_string_option(options, "accept_label"),
                 results
             );
         }
@@ -47,7 +50,10 @@ namespace Singularity.Portal {
                 title != "" ? title : "Save File",
                 false,
                 true,
+                false,
                 _get_string_option(options, "current_name"),
+                _get_bytestring_option(options, "current_folder"),
+                _get_string_option(options, "accept_label"),
                 results
             );
         }
@@ -67,7 +73,10 @@ namespace Singularity.Portal {
                 title != "" ? title : "Save Files",
                 false,
                 true,
+                false,
                 _get_string_option(options, "current_name"),
+                _get_bytestring_option(options, "current_folder"),
+                _get_string_option(options, "accept_label"),
                 results
             );
         }
@@ -84,16 +93,26 @@ namespace Singularity.Portal {
             return str != "" ? str : null;
         }
 
+        private string? _get_bytestring_option(HashTable<string, Variant> options, string key) {
+            Variant? val = options.get(key);
+            if (val == null) return null;
+            string str = val.get_bytestring();
+            return str != "" ? str : null;
+        }
+
         private async uint32 _run_picker(
             string title,
             bool multiple,
             bool save_mode,
+            bool directory_mode,
             string? current_name,
+            string? current_folder,
+            string? accept_label,
             HashTable<string, Variant> results
         ) {
             int64 ts = GLib.get_real_time();
             string result_path = GLib.Path.build_filename(
-                Environment.get_tmp_dir(),
+                Environment.get_user_runtime_dir(),
                 "singularity-portal-%lld.uris".printf(ts));
 
             try {
@@ -129,8 +148,17 @@ namespace Singularity.Portal {
                 if (save_mode) {
                     argv += "--save";
                 }
+                if (directory_mode) {
+                    argv += "--directory";
+                }
                 if (current_name != null) {
                     argv += "--current-name=" + current_name;
+                }
+                if (current_folder != null) {
+                    argv += "--current-folder=" + current_folder;
+                }
+                if (accept_label != null) {
+                    argv += "--accept-label=" + accept_label;
                 }
 
                 var launcher = new SubprocessLauncher(
