@@ -59,13 +59,11 @@ namespace Singularity.Portal {
                 "io.github.singularityos_lab.ush.Portal",
                 BusNameOwnerFlags.NONE,
                 (conn) => {
-                    // Register the ush portal object on the main portal connection,
-                    // the same one used by all other portals. This ensures the
-                    // D-Bus method calls arrive on the same connection that owns
-                    // the GDK/Wayland display.
+                    // Register on the connection that owns this name. It may be
+                    // acquired before the main portal name initializes _conn.
                     try {
                         ush_portal = new UshPortal();
-                        _conn.register_object("/io/github/singularityos_lab/ush/Portal", ush_portal);
+                        conn.register_object("/io/github/singularityos_lab/ush/Portal", ush_portal);
                         message("PortalApplication: ush portal registered.");
                     } catch (GLib.Error e) {
                         warning("PortalApplication: failed to register ush portal: %s", e.message);
