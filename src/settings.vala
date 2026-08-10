@@ -45,9 +45,11 @@ namespace Singularity.Portal {
 
         // org.gnome.desktop.interface keys to proxy verbatim from GSettings.
         // color-scheme and accent-color are handled separately (derived).
-        private const string[] IFACE_STRING_KEYS = {
+        private const string[] IFACE_KEYS = {
             "gtk-theme", "icon-theme", "cursor-theme", "font-name",
-            "monospace-font-name", "document-font-name"
+            "monospace-font-name", "document-font-name",
+            "font-antialiasing", "font-hinting", "font-rgba-order",
+            "font-rendering", "text-scaling-factor", "scaling-factor"
         };
 
         private const string IFACE_XML =
@@ -94,7 +96,7 @@ namespace Singularity.Portal {
         // Propagate live changes of proxied interface keys to clients.
         private void _on_iface_changed(string key) {
             if (_conn == null || _iface_settings == null) return;
-            if (!(key in IFACE_STRING_KEYS)) return;
+            if (!(key in IFACE_KEYS)) return;
             try {
                 _conn.emit_signal(null,
                     "/org/freedesktop/portal/desktop",
@@ -102,7 +104,7 @@ namespace Singularity.Portal {
                     "SettingChanged",
                     new Variant("(ssv)",
                         "org.gnome.desktop.interface", key,
-                        new Variant.string(_iface_settings.get_string(key))));
+                        _iface_settings.get_value(key)));
             } catch (Error e) {
                 warning("SettingsPortal: failed to emit SettingChanged for %s: %s", key, e.message);
             }
@@ -124,14 +126,14 @@ namespace Singularity.Portal {
             }
         }
 
-        // Adds the proxied org.gnome.desktop.interface string keys (icon-theme,
-        // gtk-theme, fonts, ...) to a builder, skipping any the schema lacks.
-        private void _add_iface_string_keys(VariantBuilder inner) {
+        // Adds the proxied org.gnome.desktop.interface keys to a builder,
+        // skipping any the schema lacks.
+        private void _add_iface_keys(VariantBuilder inner) {
             if (_iface_settings == null) return;
             var schema = _iface_settings.settings_schema;
-            foreach (var key in IFACE_STRING_KEYS) {
+            foreach (var key in IFACE_KEYS) {
                 if (!schema.has_key(key)) continue;
-                inner.add("{sv}", key, new Variant.string(_iface_settings.get_string(key)));
+                inner.add("{sv}", key, _iface_settings.get_value(key));
             }
         }
 
@@ -217,7 +219,7 @@ namespace Singularity.Portal {
                 // namespace through the portal (the default on Wayland) get a
                 // complete dict, including icon-theme. Omitting icon-theme made
                 // GTK fall back to hicolor and lose symbolic icons.
-                _add_iface_string_keys(inner);
+                _add_iface_keys(inner);
                 builder.add("{s@a{sv}}", "org.gnome.desktop.interface", inner.end());
             }
             if (include_wm && _wm_settings != null
@@ -259,13 +261,12 @@ namespace Singularity.Portal {
                     }));
                     return;
                 }
-                // Proxy the real interface string keys (icon-theme, gtk-theme,
-                // fonts, ...) so clients reading them through the portal get the
-                // actual value instead of a NotFound error.
-                if (_iface_settings != null && key in IFACE_STRING_KEYS
+                // Proxy the real interface keys so clients reading them through
+                // the portal get the actual value instead of a NotFound error.
+                if (_iface_settings != null && key in IFACE_KEYS
                         && _iface_settings.settings_schema.has_key(key)) {
                     invocation.return_value(new Variant.tuple({
-                        new Variant.variant(new Variant.string(_iface_settings.get_string(key)))
+                        new Variant.variant(_iface_settings.get_value(key))
                     }));
                     return;
                 }
