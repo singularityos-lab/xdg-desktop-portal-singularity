@@ -1,5 +1,9 @@
 # xdg-desktop-portal-singularity
 
+> [!IMPORTANT]
+> Report bugs and request features in the
+> [Singularity Desktop tracker](https://github.com/singularityos-lab/singularity-desktop/issues/new/choose).
+
 A backend implementation for xdg-desktop-portal for the [Singularity Desktop Environment](https://github.com/singularityos-lab).
 
 ## Requirements
