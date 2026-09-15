@@ -141,3 +141,20 @@ executable('singularity-screencast-chooser',
   install: true,
   install_dir: get_option('bindir')
 )
+
+screencast_contract_test = executable(
+  'test-screencast-contract',
+  sources: files(
+    'tests/test_screencast_contract.vala',
+    'tests/screencast_backend_stub.c',
+    'src/screencast.vala',
+  ),
+  include_directories: include_directories('src'),
+  dependencies: [gio_dep],
+)
+
+test(
+  'screencast-contract',
+  screencast_contract_test,
+  suite: 'screencast-unit',
+)
