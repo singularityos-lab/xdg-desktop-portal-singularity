@@ -113,46 +113,10 @@ namespace Singularity.Portal {
                 _conn.register_object("/org/freedesktop/portal/desktop", dynamic_launcher_portal);
                 screencast_portal = new ScreenCastPortal();
                 screencast_portal.register_on(_conn);
-                // Export the ScreenCast impl interface on the portal object
-                // path. Without this only the manual OpenPipeWireRemote filter
-                // below was reachable, so CreateSession/SelectSources/Start
-                // (and the AvailableSourceTypes/version properties) were never
-                // exposed: the frontend got "No such interface
-                // org.freedesktop.impl.portal.ScreenCast" and Chrome could not
-                // screen-share at all.
+                // The generic xdg-desktop-portal frontend owns the public
+                // OpenPipeWireRemote method and scopes its PipeWire remote to
+                // the stream node IDs returned by this implementation.
                 _conn.register_object("/org/freedesktop/portal/desktop", screencast_portal);
-
-                // OpenPipeWireRemote needs manual fd passing via D-Bus filter
-                _conn.add_filter((connection, message, incoming) => {
-                    if (!incoming) return message;
-                    if (message.get_interface() == "org.freedesktop.impl.portal.ScreenCast" &&
-                        message.get_member() == "OpenPipeWireRemote") {
-                        Variant body = message.get_body();
-                        string session_handle = "";
-                        body.get("(oa{sv})", &session_handle, null);
-                        try {
-                            int raw_fd = screencast_portal.open_pipewire_remote_fd(
-                                new ObjectPath(session_handle));
-                            var fd_list = new GLib.UnixFDList();
-                            int idx = fd_list.append(raw_fd);
-                            Posix.close(raw_fd);
-                            var reply = new GLib.DBusMessage.method_reply(message);
-                            reply.set_unix_fd_list(fd_list);
-                            reply.set_body(new Variant("(h)", idx));
-                            try { connection.send_message(reply, GLib.DBusSendMessageFlags.NONE, null); } catch (Error send_err) {
-                                warning("PortalApplication: failed to send OpenPipeWireRemote reply: %s", send_err.message);
-                            }
-                        } catch (Error e) {
-                            var err_reply = new GLib.DBusMessage.method_error_literal(
-                                message, "org.freedesktop.DBus.Error.Failed", e.message);
-                            try { connection.send_message(err_reply, GLib.DBusSendMessageFlags.NONE, null); } catch (Error send_err) {
-                                warning("PortalApplication: failed to send OpenPipeWireRemote error: %s", send_err.message);
-                            }
-                        }
-                        return null;
-                    }
-                    return message;
-                });
                 message("PortalApplication: all portals registered.");
             } catch (GLib.Error e) {
                 warning("PortalApplication: failed to register portals: %s", e.message);

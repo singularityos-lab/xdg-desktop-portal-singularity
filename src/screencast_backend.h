@@ -1,33 +1,34 @@
 #pragma once
-#include <stdint.h>
+
 #include <stdbool.h>
+#include <stdint.h>
 
 typedef struct ScreencastBackend ScreencastBackend;
+typedef struct ScreencastCapture ScreencastCapture;
 
-/* Create a backend: connects to Wayland display and PipeWire.
- * Returns NULL on failure (no compositor / no PipeWire daemon). */
+/* Create the shared Wayland/PipeWire manager. */
 ScreencastBackend *screencast_backend_new(void);
 
-/* Destroy the backend, stopping any active capture. */
+/* Destroy the manager and any captures that remain. */
 void screencast_backend_free(ScreencastBackend *backend);
 
-/* Return a NULL-terminated GStrv of available output names.
- * Caller must free with g_strfreev(). */
+/* False after a terminal shared Wayland or PipeWire failure. */
+bool screencast_backend_is_healthy(ScreencastBackend *backend);
+
+/* Return a NULL-terminated list of output names. Caller uses g_strfreev(). */
 char **screencast_backend_list_outputs(ScreencastBackend *backend);
 
-/* Start capturing the named output and exporting via a PipeWire stream.
- * The node_id becomes available asynchronously; poll screencast_backend_get_node_id().
- * Returns 0 on success, -1 if the output is not found. */
-int screencast_backend_start(ScreencastBackend *backend, const char *output_name);
+/* Create an independently owned, hidden-cursor monitor capture. */
+ScreencastCapture *screencast_backend_create_capture(
+    ScreencastBackend *backend,
+    const char *output_name);
 
-/* Stop the active capture and disconnect the PipeWire stream. */
-void screencast_backend_stop(ScreencastBackend *backend);
+/* Stop and free one capture. Both operations are safe after partial setup. */
+void screencast_capture_stop(ScreencastCapture *capture);
+void screencast_capture_free(ScreencastCapture *capture);
 
-/* Returns the PipeWire node id for the stream, or SPA_ID_INVALID (0xffffffff)
- * if not yet available. */
-uint32_t screencast_backend_get_node_id(ScreencastBackend *backend);
+/* Returns SPA_ID_INVALID until the PipeWire stream is ready. */
+uint32_t screencast_capture_get_node_id(ScreencastCapture *capture);
 
-/* Open a new PipeWire remote connection and return a dup'd socket fd.
- * The caller (portal client) uses this fd with pw_context_connect_fd().
- * Returns -1 on failure. Caller must close() the fd when done. */
-int screencast_backend_get_pw_fd(ScreencastBackend *backend);
+/* True after a terminal Wayland, PipeWire, constraint, or allocation error. */
+bool screencast_capture_has_failed(ScreencastCapture *capture);
