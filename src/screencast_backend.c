@@ -1,4 +1,5 @@
 #include "screencast_backend.h"
+#include "screencast_format.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -80,7 +81,7 @@ struct ScreencastCapture {
     uint32_t pending_format;
     bool pending_size_set;
     bool pending_format_set;
-    bool constraints_received;
+    uint32_t frame_transform;
 
     pthread_mutex_t frame_mutex;
     void *latest_data;
@@ -88,6 +89,8 @@ struct ScreencastCapture {
     uint32_t latest_width;
     uint32_t latest_height;
     uint32_t latest_stride;
+    uint32_t latest_format;
+    uint32_t latest_transform;
     bool frame_ready;
 
     struct pw_stream *pipewire_stream;
@@ -380,12 +383,16 @@ format_rank(uint32_t format)
 {
     switch (format) {
     case WL_SHM_FORMAT_XRGB8888:
-        return 4;
+        return 6;
     case WL_SHM_FORMAT_ARGB8888:
-        return 3;
+        return 5;
     case WL_SHM_FORMAT_XBGR8888:
-        return 2;
+        return 4;
     case WL_SHM_FORMAT_ABGR8888:
+        return 3;
+    case WL_SHM_FORMAT_RGB888:
+        return 2;
+    case WL_SHM_FORMAT_BGR888:
         return 1;
     default:
         return 0;
@@ -416,6 +423,8 @@ frame_ready(void *data, struct ext_image_copy_capture_frame_v1 *frame)
         capture->latest_width = capture->width;
         capture->latest_height = capture->height;
         capture->latest_stride = capture->capture_stride;
+        capture->latest_format = capture->capture_format;
+        capture->latest_transform = capture->frame_transform;
         capture->frame_ready = true;
     }
     pthread_mutex_unlock(&capture->frame_mutex);
@@ -468,9 +477,10 @@ frame_transform(void *data,
                 struct ext_image_copy_capture_frame_v1 *frame,
                 uint32_t transform)
 {
-    (void) data;
-    (void) frame;
-    (void) transform;
+    ScreencastCapture *capture = data;
+    if (frame == capture->frame &&
+        transform <= WL_OUTPUT_TRANSFORM_FLIPPED_270)
+        capture->frame_transform = transform;
 }
 
 static void
@@ -553,7 +563,7 @@ pipewire_param_changed(void *data,
     uint8_t buffer[768];
     struct spa_pod_builder builder =
         SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-    const struct spa_pod *parameters[2];
+    const struct spa_pod *parameters[3];
     parameters[0] = spa_pod_builder_add_object(
         &builder,
         SPA_TYPE_OBJECT_ParamBuffers,
@@ -578,7 +588,39 @@ pipewire_param_changed(void *data,
         SPA_POD_Id(SPA_META_Header),
         SPA_PARAM_META_size,
         SPA_POD_Int(sizeof(struct spa_meta_header)));
-    pw_stream_update_params(capture->pipewire_stream, parameters, 2);
+    parameters[2] = spa_pod_builder_add_object(
+        &builder,
+        SPA_TYPE_OBJECT_ParamMeta,
+        SPA_PARAM_Meta,
+        SPA_PARAM_META_type,
+        SPA_POD_Id(SPA_META_VideoTransform),
+        SPA_PARAM_META_size,
+        SPA_POD_Int(sizeof(struct spa_meta_videotransform)));
+    pw_stream_update_params(capture->pipewire_stream, parameters, 3);
+}
+
+static uint32_t
+wayland_transform_to_spa(uint32_t transform)
+{
+    switch (transform) {
+    case WL_OUTPUT_TRANSFORM_90:
+        return SPA_META_TRANSFORMATION_90;
+    case WL_OUTPUT_TRANSFORM_180:
+        return SPA_META_TRANSFORMATION_180;
+    case WL_OUTPUT_TRANSFORM_270:
+        return SPA_META_TRANSFORMATION_270;
+    case WL_OUTPUT_TRANSFORM_FLIPPED:
+        return SPA_META_TRANSFORMATION_Flipped;
+    case WL_OUTPUT_TRANSFORM_FLIPPED_90:
+        return SPA_META_TRANSFORMATION_Flipped90;
+    case WL_OUTPUT_TRANSFORM_FLIPPED_180:
+        return SPA_META_TRANSFORMATION_Flipped180;
+    case WL_OUTPUT_TRANSFORM_FLIPPED_270:
+        return SPA_META_TRANSFORMATION_Flipped270;
+    case WL_OUTPUT_TRANSFORM_NORMAL:
+    default:
+        return SPA_META_TRANSFORMATION_None;
+    }
 }
 
 static void
@@ -598,16 +640,29 @@ pipewire_process(void *data)
     destination->chunk->size = 0;
     destination->chunk->stride = (int32_t) capture->pipewire_stride;
 
+    uint32_t transform = SPA_META_TRANSFORMATION_None;
     pthread_mutex_lock(&capture->frame_mutex);
+    transform = wayland_transform_to_spa(capture->latest_transform);
     if (capture->frame_ready && destination->data != NULL &&
         destination->maxsize >= capture->pipewire_size &&
-        capture->latest_stride == capture->pipewire_stride) {
-        memcpy(destination->data,
-               capture->latest_data,
-               capture->pipewire_size);
+        screencast_format_convert_to_bgrx(
+            capture->latest_format,
+            capture->latest_data,
+            capture->latest_stride,
+            destination->data,
+            capture->pipewire_stride,
+            capture->latest_width,
+            capture->latest_height)) {
         destination->chunk->size = (uint32_t) capture->pipewire_size;
     }
     pthread_mutex_unlock(&capture->frame_mutex);
+
+    struct spa_meta_videotransform *video_transform =
+        spa_buffer_find_meta_data(pipewire_buffer->buffer,
+                                  SPA_META_VideoTransform,
+                                  sizeof(*video_transform));
+    if (video_transform != NULL)
+        video_transform->transform = transform;
 
     struct spa_meta_header *header = spa_buffer_find_meta_data(
         pipewire_buffer->buffer, SPA_META_Header, sizeof(*header));
@@ -691,23 +746,6 @@ build_pipewire_format(ScreencastCapture *capture,
     struct spa_fraction minimum_framerate = { 1, 1 };
     struct spa_fraction maximum_framerate = { 60, 1 };
 
-    enum spa_video_format pipewire_format;
-    switch (capture->capture_format) {
-    case WL_SHM_FORMAT_ARGB8888:
-        pipewire_format = SPA_VIDEO_FORMAT_BGRA;
-        break;
-    case WL_SHM_FORMAT_ABGR8888:
-        pipewire_format = SPA_VIDEO_FORMAT_RGBA;
-        break;
-    case WL_SHM_FORMAT_XBGR8888:
-        pipewire_format = SPA_VIDEO_FORMAT_RGBx;
-        break;
-    case WL_SHM_FORMAT_XRGB8888:
-    default:
-        pipewire_format = SPA_VIDEO_FORMAT_BGRx;
-        break;
-    }
-
     return spa_pod_builder_add_object(
         builder,
         SPA_TYPE_OBJECT_Format,
@@ -717,7 +755,7 @@ build_pipewire_format(ScreencastCapture *capture,
         SPA_FORMAT_mediaSubtype,
         SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
         SPA_FORMAT_VIDEO_format,
-        SPA_POD_Id(pipewire_format),
+        SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx),
         SPA_FORMAT_VIDEO_size,
         SPA_POD_Rectangle(&size),
         SPA_FORMAT_VIDEO_framerate,
@@ -785,8 +823,6 @@ session_buffer_size(void *data,
     ScreencastCapture *capture = data;
     if (session != capture->session)
         return;
-    if (capture->constraints_received)
-        return;
     capture->pending_width = width;
     capture->pending_height = height;
     capture->pending_size_set = true;
@@ -837,25 +873,24 @@ session_done(void *data,
     if (session != capture->session)
         return;
 
+    uint32_t capture_stride;
+    uint32_t pipewire_stride;
+    size_t capture_size;
+    size_t pipewire_size;
     if (!capture->pending_size_set || !capture->pending_format_set ||
-        capture->pending_width == 0 || capture->pending_height == 0 ||
-        capture->pending_width > UINT32_MAX / 4) {
+        !screencast_format_calculate_layout(
+            capture->pending_format,
+            capture->pending_width,
+            capture->pending_height,
+            &capture_stride,
+            &capture_size,
+            &pipewire_stride,
+            &pipewire_size)) {
         g_warning("screencast: compositor supplied unusable buffer constraints");
         capture->failed = true;
         capture->running = false;
         return;
     }
-    uint32_t capture_stride = capture->pending_width * 4;
-    if (capture->pending_height > SIZE_MAX / capture_stride ||
-        (size_t) capture_stride * capture->pending_height > UINT32_MAX) {
-        g_warning("screencast: compositor supplied oversized buffer constraints");
-        capture->failed = true;
-        capture->running = false;
-        return;
-    }
-    size_t pipewire_size =
-        (size_t) capture_stride * capture->pending_height;
-    capture->constraints_received = true;
 
     capture->generation++;
     if (capture->retry_source_id != 0) {
@@ -871,7 +906,7 @@ session_done(void *data,
     capture->height = capture->pending_height;
     capture->capture_format = capture->pending_format;
     capture->capture_stride = capture_stride;
-    capture->pipewire_stride = capture_stride;
+    capture->pipewire_stride = pipewire_stride;
     capture->pipewire_size = pipewire_size;
     capture->pending_size_set = false;
     capture->pending_format_set = false;
@@ -926,6 +961,7 @@ screencast_capture_start_next_frame(ScreencastCapture *capture)
         capture->running = false;
         return;
     }
+    capture->frame_transform = WL_OUTPUT_TRANSFORM_NORMAL;
     ext_image_copy_capture_frame_v1_add_listener(
         capture->frame, &frame_listener, capture);
     ext_image_copy_capture_frame_v1_attach_buffer(
