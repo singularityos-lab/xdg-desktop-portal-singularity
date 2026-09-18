@@ -13,6 +13,7 @@
 
 #include <glib.h>
 #include <glib-unix.h>
+#include <json-glib/json-glib.h>
 #include <pipewire/pipewire.h>
 #include <spa/buffer/meta.h>
 #include <spa/param/video/format-utils.h>
@@ -21,6 +22,7 @@
 
 #include "ext-image-capture-source-v1-client-protocol.h"
 #include "ext-image-copy-capture-v1-client-protocol.h"
+#include "ext-foreign-toplevel-list-v1-client-protocol.h"
 
 typedef struct OutputEntry {
     struct wl_output *output;
@@ -31,15 +33,32 @@ typedef struct OutputEntry {
     struct OutputEntry *next;
 } OutputEntry;
 
+typedef struct ToplevelEntry {
+    ScreencastBackend *backend;
+    struct ext_foreign_toplevel_handle_v1 *handle;
+    char *identifier;
+    char *title;
+    char *app_id;
+    char *pending_title;
+    char *pending_app_id;
+    bool ready;
+    struct ToplevelEntry *next;
+} ToplevelEntry;
+
 struct ScreencastBackend {
     struct wl_display *display;
     struct wl_registry *registry;
     struct wl_shm *shm;
     struct ext_output_image_capture_source_manager_v1 *source_manager;
+    struct ext_foreign_toplevel_image_capture_source_manager_v1
+        *toplevel_source_manager;
     struct ext_image_copy_capture_manager_v1 *capture_manager;
+    struct ext_foreign_toplevel_list_v1 *toplevel_list;
+    bool toplevel_list_finished;
     guint wayland_source_id;
 
     OutputEntry *outputs;
+    ToplevelEntry *toplevels;
     pthread_mutex_t outputs_mutex;
 
     struct pw_main_loop *pipewire_loop;
@@ -62,6 +81,7 @@ struct ScreencastCapture {
     guint retry_source_id;
     uint64_t generation;
     struct wl_output *selected_output;
+    struct ext_foreign_toplevel_handle_v1 *selected_toplevel;
 
     struct wl_buffer *shm_buffer;
     struct wl_shm_pool *shm_pool;
@@ -118,6 +138,147 @@ destroy_proxy_locally(void *proxy)
     if (proxy != NULL)
         wl_proxy_destroy((struct wl_proxy *) proxy);
 }
+
+static void
+toplevel_entry_free(ToplevelEntry *entry, bool destroy_handle)
+{
+    if (entry == NULL)
+        return;
+    if (entry->handle != NULL) {
+        if (destroy_handle)
+            ext_foreign_toplevel_handle_v1_destroy(entry->handle);
+        else
+            destroy_proxy_locally(entry->handle);
+    }
+    free(entry->identifier);
+    free(entry->title);
+    free(entry->app_id);
+    free(entry->pending_title);
+    free(entry->pending_app_id);
+    free(entry);
+}
+
+static void
+toplevel_closed(void *data,
+                struct ext_foreign_toplevel_handle_v1 *handle)
+{
+    ToplevelEntry *closed = data;
+    ScreencastBackend *backend = closed->backend;
+
+    for (GList *link = backend->captures; link != NULL; link = link->next) {
+        ScreencastCapture *capture = link->data;
+        if (capture->selected_toplevel == handle) {
+            capture->failed = true;
+            screencast_capture_stop(capture);
+        }
+    }
+
+    for (ToplevelEntry **link = &backend->toplevels; *link != NULL;
+         link = &(*link)->next) {
+        if (*link != closed)
+            continue;
+        *link = closed->next;
+        toplevel_entry_free(closed, true);
+        break;
+    }
+}
+
+static void
+toplevel_done(void *data,
+              struct ext_foreign_toplevel_handle_v1 *handle)
+{
+    ToplevelEntry *entry = data;
+    (void) handle;
+
+    if (entry->pending_title != NULL) {
+        free(entry->title);
+        entry->title = entry->pending_title;
+        entry->pending_title = NULL;
+    }
+    if (entry->pending_app_id != NULL) {
+        free(entry->app_id);
+        entry->app_id = entry->pending_app_id;
+        entry->pending_app_id = NULL;
+    }
+    entry->ready = entry->identifier != NULL;
+}
+
+static void
+toplevel_title(void *data,
+               struct ext_foreign_toplevel_handle_v1 *handle,
+               const char *title)
+{
+    ToplevelEntry *entry = data;
+    (void) handle;
+    free(entry->pending_title);
+    entry->pending_title = strdup(title);
+}
+
+static void
+toplevel_app_id(void *data,
+                struct ext_foreign_toplevel_handle_v1 *handle,
+                const char *app_id)
+{
+    ToplevelEntry *entry = data;
+    (void) handle;
+    free(entry->pending_app_id);
+    entry->pending_app_id = strdup(app_id);
+}
+
+static void
+toplevel_identifier(void *data,
+                    struct ext_foreign_toplevel_handle_v1 *handle,
+                    const char *identifier)
+{
+    ToplevelEntry *entry = data;
+    (void) handle;
+    free(entry->identifier);
+    entry->identifier = strdup(identifier);
+}
+
+static const struct ext_foreign_toplevel_handle_v1_listener
+    toplevel_handle_listener = {
+        .closed = toplevel_closed,
+        .done = toplevel_done,
+        .title = toplevel_title,
+        .app_id = toplevel_app_id,
+        .identifier = toplevel_identifier,
+    };
+
+static void
+toplevel_added(void *data,
+               struct ext_foreign_toplevel_list_v1 *list,
+               struct ext_foreign_toplevel_handle_v1 *handle)
+{
+    ScreencastBackend *backend = data;
+    (void) list;
+    ToplevelEntry *entry = calloc(1, sizeof(*entry));
+    if (entry == NULL) {
+        ext_foreign_toplevel_handle_v1_destroy(handle);
+        return;
+    }
+    entry->backend = backend;
+    entry->handle = handle;
+    entry->next = backend->toplevels;
+    backend->toplevels = entry;
+    ext_foreign_toplevel_handle_v1_add_listener(
+        handle, &toplevel_handle_listener, entry);
+}
+
+static void
+toplevel_list_finished(void *data,
+                       struct ext_foreign_toplevel_list_v1 *list)
+{
+    ScreencastBackend *backend = data;
+    if (backend->toplevel_list == list)
+        backend->toplevel_list_finished = true;
+}
+
+static const struct ext_foreign_toplevel_list_v1_listener
+    toplevel_list_listener = {
+        .toplevel = toplevel_added,
+        .finished = toplevel_list_finished,
+    };
 
 static void
 output_geometry(void *data,
@@ -224,12 +385,27 @@ registry_global(void *data,
             1);
     } else if (strcmp(
                    interface,
+                   ext_foreign_toplevel_image_capture_source_manager_v1_interface.name) == 0) {
+        backend->toplevel_source_manager = wl_registry_bind(
+            registry,
+            id,
+            &ext_foreign_toplevel_image_capture_source_manager_v1_interface,
+            1);
+    } else if (strcmp(
+                   interface,
                    ext_image_copy_capture_manager_v1_interface.name) == 0) {
         backend->capture_manager = wl_registry_bind(
             registry,
             id,
             &ext_image_copy_capture_manager_v1_interface,
             1);
+    } else if (strcmp(
+                   interface,
+                   ext_foreign_toplevel_list_v1_interface.name) == 0) {
+        backend->toplevel_list = wl_registry_bind(
+            registry, id, &ext_foreign_toplevel_list_v1_interface, 1);
+        ext_foreign_toplevel_list_v1_add_listener(
+            backend->toplevel_list, &toplevel_list_listener, backend);
     } else if (strcmp(interface, wl_output_interface.name) == 0) {
         uint32_t bound_version = version >= 4 ? 4 : version;
         OutputEntry *entry = calloc(1, sizeof(*entry));
@@ -1103,8 +1279,11 @@ screencast_backend_new(void)
         goto fail;
     }
 
-    if (backend->shm == NULL || backend->source_manager == NULL ||
-        backend->capture_manager == NULL) {
+    bool has_monitor_sources = backend->source_manager != NULL;
+    bool has_window_sources = backend->toplevel_source_manager != NULL &&
+        backend->toplevel_list != NULL;
+    if (backend->shm == NULL || backend->capture_manager == NULL ||
+        (!has_monitor_sources && !has_window_sources)) {
         fprintf(stderr,
                 "screencast: compositor is missing image capture protocols\n");
         goto fail;
@@ -1221,6 +1400,13 @@ screencast_backend_free(ScreencastBackend *backend)
     while (backend->captures != NULL)
         screencast_capture_free(backend->captures->data);
 
+    if (backend->toplevel_list != NULL &&
+        !backend->toplevel_list_finished && backend->wayland_healthy) {
+        ext_foreign_toplevel_list_v1_stop(backend->toplevel_list);
+        if (wl_display_roundtrip(backend->display) < 0)
+            backend->wayland_healthy = false;
+    }
+
     if (backend->wayland_source_id != 0)
         g_source_remove(backend->wayland_source_id);
     if (backend->pipewire_source_id != 0)
@@ -1250,12 +1436,24 @@ screencast_backend_free(ScreencastBackend *backend)
     pthread_mutex_unlock(&backend->outputs_mutex);
     pthread_mutex_destroy(&backend->outputs_mutex);
 
+    ToplevelEntry *toplevel = backend->toplevels;
+    while (toplevel != NULL) {
+        ToplevelEntry *next = toplevel->next;
+        toplevel_entry_free(toplevel, backend->wayland_healthy);
+        toplevel = next;
+    }
+
     if (backend->wayland_healthy) {
         if (backend->shm != NULL)
             wl_shm_destroy(backend->shm);
         if (backend->source_manager != NULL)
             ext_output_image_capture_source_manager_v1_destroy(
                 backend->source_manager);
+        if (backend->toplevel_source_manager != NULL)
+            ext_foreign_toplevel_image_capture_source_manager_v1_destroy(
+                backend->toplevel_source_manager);
+        if (backend->toplevel_list != NULL)
+            ext_foreign_toplevel_list_v1_destroy(backend->toplevel_list);
         if (backend->capture_manager != NULL)
             ext_image_copy_capture_manager_v1_destroy(
                 backend->capture_manager);
@@ -1264,6 +1462,8 @@ screencast_backend_free(ScreencastBackend *backend)
     } else {
         destroy_proxy_locally(backend->shm);
         destroy_proxy_locally(backend->source_manager);
+        destroy_proxy_locally(backend->toplevel_source_manager);
+        destroy_proxy_locally(backend->toplevel_list);
         destroy_proxy_locally(backend->capture_manager);
         destroy_proxy_locally(backend->registry);
     }
@@ -1274,55 +1474,136 @@ screencast_backend_free(ScreencastBackend *backend)
     free(backend);
 }
 
-bool
-screencast_backend_is_healthy(ScreencastBackend *backend)
+uint32_t
+screencast_backend_get_available_source_types(ScreencastBackend *backend)
 {
-    return backend != NULL && backend->healthy;
+    if (backend == NULL || !backend->healthy)
+        return 0;
+
+    uint32_t types = 0;
+    if (backend->source_manager != NULL)
+        types |= SCREENCAST_SOURCE_MONITOR;
+    if (backend->toplevel_source_manager != NULL &&
+        backend->toplevel_list != NULL &&
+        !backend->toplevel_list_finished)
+        types |= SCREENCAST_SOURCE_WINDOW;
+    return types;
 }
 
-char **
-screencast_backend_list_outputs(ScreencastBackend *backend)
+static void
+json_add_source(JsonBuilder *builder,
+                uint32_t type,
+                const char *id,
+                const char *label,
+                const char *app_id)
+{
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "type");
+    json_builder_add_int_value(builder, type);
+    json_builder_set_member_name(builder, "id");
+    json_builder_add_string_value(builder, id);
+    json_builder_set_member_name(builder, "label");
+    json_builder_add_string_value(builder, label);
+    json_builder_set_member_name(builder, "app_id");
+    json_builder_add_string_value(builder, app_id);
+    json_builder_end_object(builder);
+}
+
+char *
+screencast_backend_list_sources_json(ScreencastBackend *backend,
+                                     uint32_t requested_types)
 {
     if (backend == NULL || !backend->healthy)
         return NULL;
 
-    pthread_mutex_lock(&backend->outputs_mutex);
-    size_t count = 0;
-    for (OutputEntry *entry = backend->outputs; entry != NULL;
-         entry = entry->next)
-        count++;
+    requested_types &= screencast_backend_get_available_source_types(backend);
+    JsonBuilder *builder = json_builder_new();
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "version");
+    json_builder_add_int_value(builder, 1);
+    json_builder_set_member_name(builder, "sources");
+    json_builder_begin_array(builder);
 
-    char **outputs = g_new0(char *, count + 1);
-    if (outputs != NULL) {
-        size_t index = 0;
+    if (requested_types & SCREENCAST_SOURCE_MONITOR) {
+        pthread_mutex_lock(&backend->outputs_mutex);
         for (OutputEntry *entry = backend->outputs; entry != NULL;
-             entry = entry->next)
-            outputs[index++] = g_strdup(
-                entry->name != NULL ? entry->name : "output");
+             entry = entry->next) {
+            if (entry->name != NULL)
+                json_add_source(builder,
+                                SCREENCAST_SOURCE_MONITOR,
+                                entry->name,
+                                entry->name,
+                                "");
+        }
+        pthread_mutex_unlock(&backend->outputs_mutex);
     }
-    pthread_mutex_unlock(&backend->outputs_mutex);
-    return outputs;
+
+    if (requested_types & SCREENCAST_SOURCE_WINDOW) {
+        for (ToplevelEntry *entry = backend->toplevels; entry != NULL;
+             entry = entry->next) {
+            if (!entry->ready || entry->identifier == NULL)
+                continue;
+            const char *label = entry->title != NULL && entry->title[0] != '\0'
+                ? entry->title
+                : entry->app_id != NULL && entry->app_id[0] != '\0'
+                    ? entry->app_id : entry->identifier;
+            json_add_source(builder,
+                            SCREENCAST_SOURCE_WINDOW,
+                            entry->identifier,
+                            label,
+                            entry->app_id != NULL ? entry->app_id : "");
+        }
+    }
+
+    json_builder_end_array(builder);
+    json_builder_end_object(builder);
+    JsonGenerator *generator = json_generator_new();
+    JsonNode *root = json_builder_get_root(builder);
+    json_generator_set_root(generator, root);
+    char *json = json_generator_to_data(generator, NULL);
+    json_node_free(root);
+    g_object_unref(generator);
+    g_object_unref(builder);
+    return json;
 }
 
 ScreencastCapture *
 screencast_backend_create_capture(ScreencastBackend *backend,
-                                  const char *output_name)
+                                  uint32_t source_type,
+                                  const char *source_id,
+                                  bool paint_cursors)
 {
-    if (backend == NULL || !backend->healthy || output_name == NULL)
+    if (backend == NULL || !backend->healthy || source_id == NULL ||
+        (source_type != SCREENCAST_SOURCE_MONITOR &&
+         source_type != SCREENCAST_SOURCE_WINDOW))
         return NULL;
 
     struct wl_output *output = NULL;
-    pthread_mutex_lock(&backend->outputs_mutex);
-    for (OutputEntry *entry = backend->outputs; entry != NULL;
-         entry = entry->next) {
-        if (entry->name != NULL && strcmp(entry->name, output_name) == 0) {
-            output = entry->output;
-            break;
+    struct ext_foreign_toplevel_handle_v1 *toplevel = NULL;
+    if (source_type == SCREENCAST_SOURCE_MONITOR) {
+        pthread_mutex_lock(&backend->outputs_mutex);
+        for (OutputEntry *entry = backend->outputs; entry != NULL;
+             entry = entry->next) {
+            if (entry->name != NULL && strcmp(entry->name, source_id) == 0) {
+                output = entry->output;
+                break;
+            }
         }
+        pthread_mutex_unlock(&backend->outputs_mutex);
+        if (output == NULL)
+            return NULL;
+    } else {
+        for (ToplevelEntry *entry = backend->toplevels; entry != NULL;
+             entry = entry->next) {
+            if (entry->ready && entry->identifier != NULL &&
+                strcmp(entry->identifier, source_id) == 0) {
+                toplevel = entry->handle;
+                break;
+            }
+        }
+        if (toplevel == NULL)
+            return NULL;
     }
-    pthread_mutex_unlock(&backend->outputs_mutex);
-    if (output == NULL)
-        return NULL;
 
     ScreencastCapture *capture = calloc(1, sizeof(*capture));
     if (capture == NULL)
@@ -1333,15 +1614,24 @@ screencast_backend_create_capture(ScreencastBackend *backend,
     capture->running = true;
     capture->generation = 1;
     capture->selected_output = output;
+    capture->selected_toplevel = toplevel;
     pthread_mutex_init(&capture->frame_mutex, NULL);
 
-    capture->source =
-        ext_output_image_capture_source_manager_v1_create_source(
+    if (source_type == SCREENCAST_SOURCE_MONITOR) {
+        capture->source =
+            ext_output_image_capture_source_manager_v1_create_source(
             backend->source_manager, output);
+    } else {
+        capture->source =
+            ext_foreign_toplevel_image_capture_source_manager_v1_create_source(
+                backend->toplevel_source_manager, toplevel);
+    }
     if (capture->source == NULL)
         goto fail;
+    uint32_t capture_options = paint_cursors
+        ? EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_OPTIONS_PAINT_CURSORS : 0;
     capture->session = ext_image_copy_capture_manager_v1_create_session(
-        backend->capture_manager, capture->source, 0);
+        backend->capture_manager, capture->source, capture_options);
     if (capture->session == NULL)
         goto fail;
     ext_image_copy_capture_session_v1_add_listener(

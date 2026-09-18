@@ -3,160 +3,182 @@ using Gtk;
 
 namespace Singularity.Portal {
 
-    /**
-     * Screen-share output chooser. Built on the same Singularity.Shell.ShellDialog
-     * base as the logout / power-confirm dialog, so it looks like a native
-     * Singularity modal (dimmed full-screen overlay with a centered card).
-     *
-     * Signals:
-     *   selected(output_name)  - emitted when the user clicks "Share"
-     *   cancelled()            - emitted when the user dismisses the dialog
-     */
     public class ScreenCastSourcePicker : Singularity.Shell.ShellDialog {
-
-        public signal void selected  (string output_name);
+        public signal void selected (uint32 source_type, string source_id);
         public signal void cancelled ();
 
-        private string?   _chosen_output;
-        private Gtk.Box   _output_list_box;
+        private ScreenCastSource[] _sources;
+        private ScreenCastSource? _selected_source;
+        private Gtk.Box _source_list;
+        private Gtk.Button _share_button;
+        private HashTable<ScreenCastSource, Gtk.CheckButton> _checks;
+        private bool _finished = false;
 
-        public ScreenCastSourcePicker (GLib.Application? app, string[] outputs) {
+        public ScreenCastSourcePicker (GLib.Application? app,
+                                       ScreenCastSource[] sources) {
             Object (
-                application:   app as Gtk.Application,
-                anchor_top:    true,
+                application: app as Gtk.Application,
+                anchor_top: true,
                 anchor_bottom: true,
-                anchor_left:   true,
-                anchor_right:  true
+                anchor_left: true,
+                anchor_right: true
             );
+            _sources = sources;
+            _checks = new HashTable<ScreenCastSource, Gtk.CheckButton> (
+                direct_hash, direct_equal);
             add_css_class ("screencast-picker-dialog");
-            _build (outputs);
+            _build ();
+            close_request.connect (() => {
+                _cancel ();
+                return false;
+            });
             hide ();
         }
 
-        private void _build (string[] outputs) {
+        private void _build () {
             var card = new Gtk.Box (Gtk.Orientation.VERTICAL, 14);
             card.halign = Gtk.Align.CENTER;
             card.valign = Gtk.Align.CENTER;
             card.add_css_class ("power-card");
-            card.margin_top    = 28;
+            card.margin_top = 28;
             card.margin_bottom = 28;
-            card.margin_start  = 40;
-            card.margin_end    = 40;
+            card.margin_start = 40;
+            card.margin_end = 40;
             content_box.append (card);
 
             var icon = new Gtk.Image.from_icon_name ("video-display-symbolic");
             icon.pixel_size = 48;
             card.append (icon);
 
-            var title_lbl = new Gtk.Label (_("Share your screen"));
-            title_lbl.add_css_class ("title-1");
-            card.append (title_lbl);
+            var title = new Gtk.Label (_("Share your screen"));
+            title.add_css_class ("title-1");
+            card.append (title);
 
-            var subtitle = new Gtk.Label (_("Choose a monitor to share"));
+            var subtitle = new Gtk.Label (_("Choose what to share"));
             subtitle.add_css_class ("dim-label");
             subtitle.add_css_class ("body");
             card.append (subtitle);
 
-            _output_list_box = new Gtk.Box (Gtk.Orientation.VERTICAL, 8);
-            _output_list_box.margin_top = 6;
-            card.append (_output_list_box);
+            _source_list = new Gtk.Box (Gtk.Orientation.VERTICAL, 8);
+            _source_list.margin_top = 6;
+            card.append (_source_list);
 
-            var btn_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
-            btn_row.halign = Gtk.Align.CENTER;
-            btn_row.margin_top = 4;
-            card.append (btn_row);
+            var buttons = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
+            buttons.halign = Gtk.Align.CENTER;
+            buttons.margin_top = 4;
+            card.append (buttons);
 
-            var cancel_btn = new Gtk.Button.with_label (_("Cancel"));
-            cancel_btn.add_css_class ("pill");
-            cancel_btn.width_request = 128;
-            cancel_btn.clicked.connect (_on_cancel_clicked);
-            btn_row.append (cancel_btn);
+            var cancel_button = new Gtk.Button.with_label (_("Cancel"));
+            cancel_button.add_css_class ("pill");
+            cancel_button.width_request = 128;
+            cancel_button.clicked.connect (() => {
+                _cancel ();
+            });
+            buttons.append (cancel_button);
 
-            var share_btn = new Gtk.Button.with_label (_("Share"));
-            share_btn.add_css_class ("pill");
-            share_btn.add_css_class ("suggested-action");
-            share_btn.width_request = 128;
-            share_btn.clicked.connect (_on_share_clicked);
-            btn_row.append (share_btn);
+            _share_button = new Gtk.Button.with_label (_("Share"));
+            _share_button.add_css_class ("pill");
+            _share_button.add_css_class ("suggested-action");
+            _share_button.width_request = 128;
+            _share_button.clicked.connect (_share);
+            buttons.append (_share_button);
 
-            _populate (outputs);
+            _populate ();
         }
 
-        private void _populate (string[] outputs) {
-            if (outputs.length == 0) {
-                var lbl = new Gtk.Label (_("No monitors detected"));
-                lbl.add_css_class ("dim-label");
-                _output_list_box.append (lbl);
+        private void _populate () {
+            if (_sources.length == 0) {
+                var empty = new Gtk.Label (_("No sources available"));
+                empty.add_css_class ("dim-label");
+                _source_list.append (empty);
+                _share_button.sensitive = false;
                 return;
             }
 
-            _chosen_output = outputs[0];
-            foreach (unowned string name in outputs)
-                _add_output_row (name);
+            _selected_source = _sources[0];
+            foreach (unowned ScreenCastSource source in _sources)
+                _add_source (source);
         }
 
-        private void _add_output_row (string name) {
+        private void _add_source (ScreenCastSource source) {
             var row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
             row.add_css_class ("card");
-            row.margin_top    = 2;
+            row.margin_top = 2;
             row.margin_bottom = 2;
 
-            var mon_icon = new Gtk.Image.from_icon_name ("video-display-symbolic");
-            mon_icon.pixel_size = 24;
-            row.append (mon_icon);
+            string icon_name = source.source_type == SCREENCAST_SOURCE_WINDOW
+                ? "window-symbolic" : "video-display-symbolic";
+            var icon = new Gtk.Image.from_icon_name (icon_name);
+            icon.pixel_size = 24;
+            row.append (icon);
 
-            var lbl = new Gtk.Label (name);
-            lbl.hexpand = true;
-            lbl.halign  = Gtk.Align.START;
-            row.append (lbl);
+            var labels = new Gtk.Box (Gtk.Orientation.VERTICAL, 2);
+            labels.hexpand = true;
+            labels.halign = Gtk.Align.START;
+            row.append (labels);
+
+            var label = new Gtk.Label (source.label);
+            label.halign = Gtk.Align.START;
+            label.ellipsize = Pango.EllipsizeMode.END;
+            label.max_width_chars = 48;
+            labels.append (label);
+
+            if (source.app_id != "") {
+                var app = new Gtk.Label (source.app_id);
+                app.halign = Gtk.Align.START;
+                app.add_css_class ("dim-label");
+                labels.append (app);
+            }
 
             var check = new Gtk.CheckButton ();
-            check.active = (_chosen_output == name);
+            check.active = source == _selected_source;
+            _checks.insert (source, check);
+            check.toggled.connect (() => {
+                if (check.active)
+                    _select (source);
+            });
             row.append (check);
 
             var gesture = new Gtk.GestureClick ();
-            gesture.released.connect ((n, x, y) => {
-                _set_chosen (name);
+            gesture.released.connect (() => {
+                _select (source);
             });
             row.add_controller (gesture);
-
-            check.toggled.connect (() => {
-                if (check.active) _set_chosen (name);
-            });
-
-            _output_list_box.append (row);
+            _source_list.append (row);
         }
 
-        private void _set_chosen (string name) {
-            _chosen_output = name;
-            Gtk.Widget? child = _output_list_box.get_first_child ();
-            while (child != null) {
-                var row = child as Gtk.Box;
-                if (row != null) {
-                    Gtk.Widget? icon_w = row.get_first_child ();
-                    Gtk.Widget? lbl_w  = icon_w != null ? icon_w.get_next_sibling () : null;
-                    Gtk.Widget? chk_w  = lbl_w  != null ? lbl_w.get_next_sibling ()  : null;
-                    var lbl = lbl_w as Gtk.Label;
-                    var chk = chk_w as Gtk.CheckButton;
-                    if (lbl != null && chk != null)
-                        chk.set_active (lbl.label == name);
-                }
-                child = child.get_next_sibling ();
+        private void _select (ScreenCastSource source) {
+            _selected_source = source;
+            foreach (unowned ScreenCastSource candidate in _sources) {
+                Gtk.CheckButton? check = _checks.lookup (candidate);
+                if (check != null)
+                    check.active = candidate == source;
             }
         }
 
-        private void _on_share_clicked () {
-            string? out_name = _chosen_output;
-            close_dialog ();
-            if (out_name != null)
-                selected (out_name);
-            else
-                cancelled ();
+        private void _share () {
+            ScreenCastSource? source = _selected_source;
+            if (source == null) {
+                _cancel ();
+                return;
+            }
+            if (_finished)
+                return;
+            _finished = true;
+            base.close_dialog ();
+            selected (source.source_type, source.source_id);
         }
 
-        private void _on_cancel_clicked () {
-            close_dialog ();
+        private void _cancel () {
+            if (_finished)
+                return;
+            _finished = true;
+            base.close_dialog ();
             cancelled ();
+        }
+
+        public override void close_dialog () {
+            _cancel ();
         }
     }
 }

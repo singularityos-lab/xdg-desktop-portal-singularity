@@ -6,13 +6,17 @@ namespace Singularity.Portal {
     private extern void* screencast_backend_new ();
     [CCode (cname = "screencast_backend_free", cheader_filename = "screencast_backend.h")]
     private extern void screencast_backend_free (void* backend);
-    [CCode (cname = "screencast_backend_is_healthy", cheader_filename = "screencast_backend.h")]
-    private extern bool screencast_backend_is_healthy (void* backend);
-    [CCode (cname = "screencast_backend_list_outputs", cheader_filename = "screencast_backend.h", array_length = false, array_null_terminated = true)]
-    private extern string[] screencast_backend_list_outputs (void* backend);
+    [CCode (cname = "screencast_backend_get_available_source_types", cheader_filename = "screencast_backend.h")]
+    private extern uint32 screencast_backend_get_available_source_types (
+        void* backend);
+    [CCode (cname = "screencast_backend_list_sources_json", cheader_filename = "screencast_backend.h")]
+    private extern string? screencast_backend_list_sources_json (
+        void* backend, uint32 requested_types);
     [CCode (cname = "screencast_backend_create_capture", cheader_filename = "screencast_backend.h")]
     private extern void* screencast_backend_create_capture (void* backend,
-                                                            string output_name);
+                                                            uint32 source_type,
+                                                            string source_id,
+                                                            bool paint_cursors);
     [CCode (cname = "screencast_capture_stop", cheader_filename = "screencast_backend.h")]
     private extern void screencast_capture_stop (void* capture);
     [CCode (cname = "screencast_capture_free", cheader_filename = "screencast_backend.h")]
@@ -31,14 +35,16 @@ namespace Singularity.Portal {
 
     /** Boundary between portal policy and the Wayland/PipeWire capture engine. */
     public interface ScreenCastCaptureManager : Object {
-        public abstract string[] list_outputs ();
-        public abstract ScreenCastCapture? create_capture (string output_name);
+        public abstract uint32 available_source_types { get; }
+        public abstract ScreenCastSource[] list_sources (uint32 requested_types);
+        public abstract ScreenCastCapture? create_capture (
+            uint32 source_type, string source_id, bool paint_cursors);
     }
 
     /** Boundary around the out-of-process user interaction. */
     public interface ScreenCastChooser : Object {
-        public abstract async string? choose (
-            string[] outputs, Cancellable cancellable);
+        public abstract async ScreenCastChooserResult choose (
+            ScreenCastSource[] sources, Cancellable cancellable);
     }
 
     private class NativeScreenCastCapture : Object, ScreenCastCapture {
@@ -62,10 +68,12 @@ namespace Singularity.Portal {
         }
 
         public NativeScreenCastCapture (NativeScreenCastCaptureManager manager,
-                                        string output_name) {
+                                        uint32 source_type,
+                                        string source_id,
+                                        bool paint_cursors) {
             _manager = manager;
             _capture = screencast_backend_create_capture (
-                manager.native_handle, output_name);
+                manager.native_handle, source_type, source_id, paint_cursors);
             if (_capture != null)
                 manager.capture_created ();
         }
@@ -92,21 +100,36 @@ namespace Singularity.Portal {
         private uint _active_captures = 0;
 
         internal void* native_handle { get { return _inventory_backend; } }
+        public uint32 available_source_types {
+            get {
+                _ensure_backend ();
+                return _inventory_backend != null
+                    ? screencast_backend_get_available_source_types (
+                        _inventory_backend) : 0u;
+            }
+        }
+
         public NativeScreenCastCaptureManager () {
             _inventory_backend = screencast_backend_new ();
         }
 
-        public string[] list_outputs () {
+        public ScreenCastSource[] list_sources (uint32 requested_types) {
             _ensure_backend ();
             if (_inventory_backend == null)
                 return {};
-            return screencast_backend_list_outputs (_inventory_backend);
+            string? json = screencast_backend_list_sources_json (
+                _inventory_backend, requested_types);
+            return json != null
+                ? ScreenCastJson.decode_sources (json)
+                : new ScreenCastSource[0];
         }
 
-        public ScreenCastCapture? create_capture (string output_name) {
+        public ScreenCastCapture? create_capture (uint32 source_type,
+                                                  string source_id,
+                                                  bool paint_cursors) {
             _ensure_backend ();
             var capture = new NativeScreenCastCapture (
-                this, output_name);
+                this, source_type, source_id, paint_cursors);
             return capture.valid ? capture : null;
         }
 
@@ -122,7 +145,8 @@ namespace Singularity.Portal {
         private void _ensure_backend () {
             if (_inventory_backend != null &&
                 (_active_captures != 0 ||
-                 screencast_backend_is_healthy (_inventory_backend)))
+                 screencast_backend_get_available_source_types (
+                    _inventory_backend) != 0))
                 return;
 
             if (_inventory_backend != null)
@@ -139,41 +163,52 @@ namespace Singularity.Portal {
     }
 
     private class SubprocessScreenCastChooser : Object, ScreenCastChooser {
-        public async string? choose (
-            string[] outputs, Cancellable cancellable) {
+        public async ScreenCastChooserResult choose (
+            ScreenCastSource[] sources, Cancellable cancellable) {
             string[] argv = { _resolve_chooser_bin () };
-            foreach (unowned string output in outputs)
-                argv += output;
 
             try {
                 var process = new Subprocess.newv (argv,
-                    SubprocessFlags.STDOUT_PIPE);
+                    SubprocessFlags.STDIN_PIPE | SubprocessFlags.STDOUT_PIPE);
                 ulong cancelled_id = cancellable.cancelled.connect (() => {
                     process.force_exit ();
                 });
                 string? stdout_buffer = null;
                 try {
                     yield process.communicate_utf8_async (
-                        null, cancellable,
+                        ScreenCastJson.encode_sources (sources), cancellable,
                         out stdout_buffer, null);
                 } finally {
                     cancellable.disconnect (cancelled_id);
                 }
                 if (!process.get_successful ()) {
                     warning ("ScreenCastPortal: chooser exited unsuccessfully");
-                    return null;
+                    return new ScreenCastChooserResult (
+                        ScreenCastChooserStatus.FAILED);
                 }
                 if (stdout_buffer == null)
-                    return null;
+                    return new ScreenCastChooserResult (
+                        ScreenCastChooserStatus.CANCELLED);
                 string chosen = stdout_buffer.strip ();
                 if (chosen == "")
-                    return null;
-                return chosen;
+                    return new ScreenCastChooserResult (
+                        ScreenCastChooserStatus.CANCELLED);
+                ScreenCastSelection? selection =
+                    ScreenCastJson.decode_selection (chosen);
+                if (selection == null) {
+                    warning ("ScreenCastPortal: chooser returned malformed output");
+                    return new ScreenCastChooserResult (
+                        ScreenCastChooserStatus.FAILED);
+                }
+                return new ScreenCastChooserResult (
+                    ScreenCastChooserStatus.SELECTED, selection);
             } catch (IOError.CANCELLED caught) {
-                return null;
+                return new ScreenCastChooserResult (
+                    ScreenCastChooserStatus.CANCELLED);
             } catch (Error caught) {
                 warning ("ScreenCastPortal: failed to run chooser: %s", caught.message);
-                return null;
+                return new ScreenCastChooserResult (
+                    ScreenCastChooserStatus.FAILED);
             }
         }
 
@@ -193,7 +228,11 @@ namespace Singularity.Portal {
     }
 
     private class ScreenCastSessionState : Object {
-        public string output_name = "";
+        public uint32 source_type = 0;
+        public string source_id = "";
+        public uint32 requested_types = SCREENCAST_SOURCE_MONITOR;
+        public uint32 cursor_mode = SCREENCAST_CURSOR_HIDDEN;
+        public bool multiple = false;
         public bool select_called = false;
         public bool start_called = false;
         public bool closed = false;
@@ -261,10 +300,14 @@ namespace Singularity.Portal {
         private HashTable<string, uint> _request_registration_ids;
 
         public uint AvailableSourceTypes {
-            get { return 1u; }
+            get { return _manager.available_source_types; }
         }
         public uint AvailableCursorModes {
-            get { return 1u; }
+            get {
+                return _manager.available_source_types != 0
+                    ? SCREENCAST_CURSOR_HIDDEN | SCREENCAST_CURSOR_EMBEDDED
+                    : 0u;
+            }
         }
         [DBus (name = "version")]
         public uint version { get { return 3u; } }
@@ -366,40 +409,53 @@ namespace Singularity.Portal {
                 return;
             }
             state.selection_cancellable = cancellable;
-            uint32 requested_types = _get_uint_option (options, "types", 1u);
-            uint32 cursor_mode = _get_uint_option (options, "cursor_mode", 1u);
-            if ((requested_types & 1u) == 0 || cursor_mode != 1u) {
+            uint32 requested_types = _get_uint_option (
+                options, "types", SCREENCAST_SOURCE_MONITOR);
+            requested_types &= _manager.available_source_types;
+            uint32 cursor_mode = _get_uint_option (
+                options, "cursor_mode", SCREENCAST_CURSOR_HIDDEN);
+            if (requested_types == 0 ||
+                (cursor_mode != SCREENCAST_CURSOR_HIDDEN &&
+                 cursor_mode != SCREENCAST_CURSOR_EMBEDDED)) {
                 state.selection_cancellable = null;
                 _end_request (request_path);
                 response = 2;
                 return;
             }
 
-            string[] outputs = _manager.list_outputs ();
-            if (outputs.length == 0) {
-                message ("ScreenCastPortal: no outputs are currently available");
+            ScreenCastSource[] sources = _manager.list_sources (requested_types);
+            if (sources.length == 0) {
+                message ("ScreenCastPortal: no sources are currently available");
                 state.selection_cancellable = null;
                 _end_request (request_path);
                 response = 2;
                 return;
             }
-            string? chosen;
+            ScreenCastChooserResult choice;
             try {
-                chosen = yield _chooser.choose (outputs, cancellable);
+                choice = yield _chooser.choose (sources, cancellable);
             } finally {
                 state.selection_cancellable = null;
                 _end_request (request_path);
             }
             if (state.closed || cancellable.is_cancelled () ||
-                chosen == null) {
+                choice.status == ScreenCastChooserStatus.CANCELLED) {
                 response = cancellable.is_cancelled () ? 1u
                     : state.closed ? 2u : 1u;
                 return;
             }
+            ScreenCastSelection? chosen = choice.selection;
+            if (choice.status != ScreenCastChooserStatus.SELECTED ||
+                chosen == null) {
+                response = 2;
+                return;
+            }
 
             bool offered = false;
-            foreach (unowned string output in outputs) {
-                if (output == chosen) {
+            foreach (unowned ScreenCastSource source in sources) {
+                if (source.source_type == chosen.source_type &&
+                    source.source_id == chosen.source_id &&
+                    (requested_types & source.source_type) != 0) {
                     offered = true;
                     break;
                 }
@@ -409,7 +465,11 @@ namespace Singularity.Portal {
                 return;
             }
 
-            state.output_name = chosen;
+            state.source_type = chosen.source_type;
+            state.source_id = chosen.source_id;
+            state.requested_types = requested_types;
+            state.cursor_mode = cursor_mode;
+            state.multiple = _get_bool_option (options, "multiple", false);
             response = 0;
         }
 
@@ -425,13 +485,16 @@ namespace Singularity.Portal {
             results = new HashTable<string, Variant> (str_hash, str_equal);
             var state = _states.lookup ((string) session_handle);
             if (state == null || state.closed || state.start_called ||
-                state.output_name == "") {
+                state.source_id == "") {
                 response = 2;
                 return;
             }
             state.start_called = true;
 
-            state.capture = _manager.create_capture (state.output_name);
+            state.capture = _manager.create_capture (
+                state.source_type,
+                state.source_id,
+                state.cursor_mode == SCREENCAST_CURSOR_EMBEDDED);
             if (state.capture == null) {
                 response = 2;
                 return;
@@ -494,7 +557,7 @@ namespace Singularity.Portal {
 
             var properties = new VariantBuilder (new VariantType ("a{sv}"));
             properties.add ("{sv}", "source_type",
-                new Variant.uint32 (1u));
+                new Variant.uint32 (state.source_type));
             var stream = new Variant ("(u@a{sv})", node_id, properties.end ());
             var streams = new VariantBuilder (new VariantType ("a(ua{sv})"));
             streams.add_value (stream);
@@ -635,5 +698,13 @@ namespace Singularity.Portal {
                 ? value.get_uint32 () : fallback;
         }
 
+        private static bool _get_bool_option (
+            HashTable<string, Variant> options,
+            string key,
+            bool fallback) {
+            Variant? value = options.lookup (key);
+            return value != null && value.is_of_type (VariantType.BOOLEAN)
+                ? value.get_boolean () : fallback;
+        }
     }
 }

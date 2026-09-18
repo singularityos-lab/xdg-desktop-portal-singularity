@@ -88,6 +88,7 @@ sources = files(
   'src/settings.vala',
   'src/screenshot.vala',
   'src/screencast.vala',
+  'src/screencast_types.vala',
   'src/screencast_backend.c',
   'src/screencast_format.c',
   'src/file_chooser_portal.vala',
@@ -133,14 +134,19 @@ executable('xdg-desktop-portal-singularity',
 # portal so GTK is never initialised inside the portal daemon (which would
 # deadlock on its own Settings portal query during Gtk.init).
 executable('singularity-screencast-chooser',
-  sources: files('src/screencast_source_picker.vala', 'src/chooser_main.vala'),
+  sources: files(
+    'src/screencast_source_picker.vala',
+    'src/screencast_types.vala',
+    'src/chooser_main.vala',
+  ),
   dependencies: [
     gtk4_dep,
     gio_dep,
+    json_dep,
     libsingularity_dep,
   ],
   install: true,
-  install_dir: get_option('bindir')
+  install_dir: get_option('libexecdir')
 )
 
 screencast_contract_test = executable(
@@ -149,9 +155,10 @@ screencast_contract_test = executable(
     'tests/test_screencast_contract.vala',
     'tests/screencast_backend_stub.c',
     'src/screencast.vala',
+    'src/screencast_types.vala',
   ),
   include_directories: include_directories('src'),
-  dependencies: [gio_dep],
+  dependencies: [gio_dep, json_dep],
 )
 
 test(
