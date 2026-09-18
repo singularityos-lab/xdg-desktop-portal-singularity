@@ -89,6 +89,7 @@ sources = files(
   'src/screenshot.vala',
   'src/screencast.vala',
   'src/screencast_backend.c',
+  'src/screencast_format.c',
   'src/file_chooser_portal.vala',
   'src/notification.vala',
   'src/inhibit.vala',
@@ -156,5 +157,21 @@ screencast_contract_test = executable(
 test(
   'screencast-contract',
   screencast_contract_test,
+  suite: 'screencast-unit',
+)
+
+screencast_format_test = executable(
+  'test-screencast-format',
+  sources: files(
+    'tests/test_screencast_format.c',
+    'src/screencast_format.c',
+  ),
+  include_directories: include_directories('src'),
+  dependencies: [gio_dep, wayland_client_dep],
+)
+
+test(
+  'screencast-format',
+  screencast_format_test,
   suite: 'screencast-unit',
 )
