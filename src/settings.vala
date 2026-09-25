@@ -49,7 +49,8 @@ namespace Singularity.Portal {
             "gtk-theme", "icon-theme", "cursor-theme", "font-name",
             "monospace-font-name", "document-font-name",
             "font-antialiasing", "font-hinting", "font-rgba-order",
-            "font-rendering", "text-scaling-factor", "scaling-factor"
+            "font-rendering", "text-scaling-factor", "scaling-factor",
+            "gtk-im-module"
         };
 
         private const string IFACE_XML =
