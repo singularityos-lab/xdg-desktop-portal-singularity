@@ -31,7 +31,15 @@ namespace Singularity.Portal {
         private PrintPortal print_portal;
         private DynamicLauncherPortal dynamic_launcher_portal;
         private ScreenCastPortal screencast_portal;
+        private ScreenRecorderService screen_recorder;
         private UshPortal ush_portal;
+        private BackgroundPortal background_portal;
+        private GlobalShortcutsPortal global_shortcuts_portal;
+        private GlobalShortcutsBridge global_shortcuts_bridge;
+        private UsbPortal usb_portal;
+        private RemoteDesktopPortal remote_desktop_portal;
+        private ClipboardPortal clipboard_portal;
+        private RemoteSessionsMonitor remote_sessions;
         private DBusConnection _conn;
         private MainLoop _loop;
         private uint _bus_owner_id;
@@ -93,13 +101,13 @@ namespace Singularity.Portal {
                 _conn.register_object("/org/freedesktop/portal/desktop", notification_portal);
                 inhibit_portal = new InhibitPortal(_conn);
                 _conn.register_object("/org/freedesktop/portal/desktop", inhibit_portal);
-                access_portal = new AccessPortal();
+                access_portal = new AccessPortal(_conn);
                 _conn.register_object("/org/freedesktop/portal/desktop", access_portal);
                 account_portal = new AccountPortal(_conn);
                 _conn.register_object("/org/freedesktop/portal/desktop", account_portal);
                 email_portal = new EmailPortal();
                 _conn.register_object("/org/freedesktop/portal/desktop", email_portal);
-                lockdown_portal = new LockdownPortal();
+                lockdown_portal = new LockdownPortal(_conn);
                 _conn.register_object("/org/freedesktop/portal/desktop", lockdown_portal);
                 wallpaper_portal = new WallpaperPortal();
                 _conn.register_object("/org/freedesktop/portal/desktop", wallpaper_portal);
@@ -117,6 +125,23 @@ namespace Singularity.Portal {
                 // OpenPipeWireRemote method and scopes its PipeWire remote to
                 // the stream node IDs returned by this implementation.
                 _conn.register_object("/org/freedesktop/portal/desktop", screencast_portal);
+                screen_recorder = new ScreenRecorderService(screencast_portal.capture_manager, _conn);
+                _conn.register_object(SCREEN_RECORDER_OBJECT_PATH, screen_recorder);
+                background_portal = new BackgroundPortal(_conn);
+                _conn.register_object("/org/freedesktop/portal/desktop", background_portal);
+                global_shortcuts_portal = new GlobalShortcutsPortal(_conn);
+                _conn.register_object("/org/freedesktop/portal/desktop", global_shortcuts_portal);
+                global_shortcuts_bridge = new GlobalShortcutsBridge(global_shortcuts_portal);
+                _conn.register_object("/org/freedesktop/portal/desktop", global_shortcuts_bridge);
+                usb_portal = new UsbPortal(_conn);
+                _conn.register_object("/org/freedesktop/portal/desktop", usb_portal);
+                remote_desktop_portal = new RemoteDesktopPortal(_conn, screencast_portal);
+                _conn.register_object("/org/freedesktop/portal/desktop", remote_desktop_portal);
+                clipboard_portal = new ClipboardPortal(remote_desktop_portal);
+                _conn.register_object("/org/freedesktop/portal/desktop", clipboard_portal);
+                remote_sessions = new RemoteSessionsMonitor(remote_desktop_portal);
+                remote_desktop_portal.sessions_changed.connect(() => remote_sessions.changed());
+                _conn.register_object("/dev/sinty/portal/RemoteSessions", remote_sessions);
                 message("PortalApplication: all portals registered.");
             } catch (GLib.Error e) {
                 warning("PortalApplication: failed to register portals: %s", e.message);

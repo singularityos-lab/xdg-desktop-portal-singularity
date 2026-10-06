@@ -50,8 +50,24 @@ namespace Singularity.Portal {
             "monospace-font-name", "document-font-name",
             "font-antialiasing", "font-hinting", "font-rgba-order",
             "font-rendering", "text-scaling-factor", "scaling-factor",
-            "gtk-im-module"
+            "gtk-im-module", "enable-animations", "cursor-size",
+            "cursor-blink", "cursor-blink-time", "cursor-blink-timeout",
+            "overlay-scrolling"
         };
+
+        private const string[] EXTRA_NAMESPACES = {
+            "org.gnome.desktop.a11y.interface",
+            "org.gnome.desktop.peripherals.mouse"
+        };
+
+        private const string[] EXTRA_KEYS = {
+            "org.gnome.desktop.a11y.interface/high-contrast",
+            "org.gnome.desktop.a11y.interface/show-status-shapes",
+            "org.gnome.desktop.peripherals.mouse/double-click"
+        };
+
+        private HashTable<string, GLib.Settings> _extra_settings =
+            new HashTable<string, GLib.Settings>(str_hash, str_equal);
 
         private const string IFACE_XML =
             "<node>" +
@@ -91,6 +107,13 @@ namespace Singularity.Portal {
                 _wm_settings = new GLib.Settings("org.gnome.desktop.wm.preferences");
                 _wm_settings.changed["button-layout"].connect(_on_wm_button_layout_changed);
             }
+            foreach (unowned string ns in EXTRA_NAMESPACES) {
+                if (src == null || src.lookup(ns, true) == null) continue;
+                var extra = new GLib.Settings(ns);
+                string captured = ns;
+                extra.changed.connect((key) => _on_extra_changed(captured, key));
+                _extra_settings.insert(ns, extra);
+            }
             _node_info = new DBusNodeInfo.for_xml(IFACE_XML);
         }
 
@@ -108,6 +131,38 @@ namespace Singularity.Portal {
                         _iface_settings.get_value(key)));
             } catch (Error e) {
                 warning("SettingsPortal: failed to emit SettingChanged for %s: %s", key, e.message);
+            }
+        }
+
+        private bool _extra_has(string ns, string key) {
+            if (!(("%s/%s".printf(ns, key)) in EXTRA_KEYS)) return false;
+            var extra = _extra_settings.get(ns);
+            return extra != null && extra.settings_schema.has_key(key);
+        }
+
+        private uint32 _get_contrast() {
+            return _extra_has("org.gnome.desktop.a11y.interface", "high-contrast")
+                && _extra_settings.get("org.gnome.desktop.a11y.interface").get_boolean("high-contrast") ? 1 : 0;
+        }
+
+        private void _emit(string ns, string key, Variant value) {
+            if (_conn == null) return;
+            try {
+                _conn.emit_signal(null,
+                    "/org/freedesktop/portal/desktop",
+                    "org.freedesktop.impl.portal.Settings",
+                    "SettingChanged",
+                    new Variant("(ssv)", ns, key, value));
+            } catch (Error e) {
+                warning("SettingsPortal: failed to emit SettingChanged for %s: %s", key, e.message);
+            }
+        }
+
+        private void _on_extra_changed(string ns, string key) {
+            if (!_extra_has(ns, key)) return;
+            _emit(ns, key, _extra_settings.get(ns).get_value(key));
+            if (ns == "org.gnome.desktop.a11y.interface" && key == "high-contrast") {
+                _emit("org.freedesktop.appearance", "contrast", new Variant.uint32(_get_contrast()));
             }
         }
 
@@ -210,6 +265,7 @@ namespace Singularity.Portal {
                 var inner = new VariantBuilder(new VariantType("a{sv}"));
                 inner.add("{sv}", "color-scheme", new Variant.uint32(_get_color_scheme()));
                 inner.add("{sv}", "accent-color", _get_accent_color_variant());
+                inner.add("{sv}", "contrast", new Variant.uint32(_get_contrast()));
                 builder.add("{s@a{sv}}", "org.freedesktop.appearance", inner.end());
             }
             if (include_gnome_desktop) {
@@ -230,6 +286,21 @@ namespace Singularity.Portal {
                     new Variant.string(_wm_settings.get_string("button-layout")));
                 builder.add("{s@a{sv}}", "org.gnome.desktop.wm.preferences", inner.end());
             }
+            foreach (unowned string ns in EXTRA_NAMESPACES) {
+                bool wanted = want_all;
+                foreach (var requested in namespaces) {
+                    if (ns_matches(requested, ns)) wanted = true;
+                }
+                var extra = _extra_settings.get(ns);
+                if (!wanted || extra == null) continue;
+                var inner = new VariantBuilder(new VariantType("a{sv}"));
+                foreach (unowned string entry in EXTRA_KEYS) {
+                    if (!entry.has_prefix(ns + "/")) continue;
+                    string key = entry.substring(ns.length + 1);
+                    if (extra.settings_schema.has_key(key)) inner.add("{sv}", key, extra.get_value(key));
+                }
+                builder.add("{s@a{sv}}", ns, inner.end());
+            }
             invocation.return_value(new Variant.tuple({ builder.end() }));
         }
 
@@ -240,6 +311,18 @@ namespace Singularity.Portal {
             if (ns == "org.freedesktop.appearance" && key == "color-scheme") {
                 invocation.return_value(new Variant.tuple({
                     new Variant.variant(new Variant.uint32(_get_color_scheme()))
+                }));
+                return;
+            }
+            if (ns == "org.freedesktop.appearance" && key == "contrast") {
+                invocation.return_value(new Variant.tuple({
+                    new Variant.variant(new Variant.uint32(_get_contrast()))
+                }));
+                return;
+            }
+            if (_extra_has(ns, key)) {
+                invocation.return_value(new Variant.tuple({
+                    new Variant.variant(_extra_settings.get(ns).get_value(key))
                 }));
                 return;
             }

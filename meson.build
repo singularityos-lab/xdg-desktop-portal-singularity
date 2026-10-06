@@ -19,8 +19,10 @@ gio_unix_dep = dependency('gio-unix-2.0')
 gee_dep = dependency('gee-0.8')
 json_dep = dependency('json-glib-1.0')
 gtk4_unix_print_dep = dependency('gtk4-unix-print')
+gtk4_wayland_dep = dependency('gtk4-wayland')
 wayland_client_dep = dependency('wayland-client')
 posix_dep = valac.find_library('posix')
+xkb_dep = dependency('xkbcommon')
 gtk4_layer_shell_dep = dependency('gtk4-layer-shell-0')
 
 # Pipewire dependency handled via pkg-config to avoid valac issues
@@ -83,6 +85,10 @@ copy_proto_h = custom_target(
   command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@']
 )
 
+libsingularity_proj = subproject('libsingularity')
+sharing_host_dep = libsingularity_proj.get_variable('libsingularity_sharing_host_dep')
+sharing_host_vapidir = libsingularity_proj.get_variable('sharing_host_vapidir')
+
 sources = files(
   'src/main.vala',
   'src/settings.vala',
@@ -91,6 +97,7 @@ sources = files(
   'src/screencast_types.vala',
   'src/screencast_backend.c',
   'src/screencast_format.c',
+  'src/screen_recorder.vala',
   'src/file_chooser_portal.vala',
   'src/notification.vala',
   'src/inhibit.vala',
@@ -104,28 +111,39 @@ sources = files(
   'src/print.vala',
   'src/dynamic_launcher.vala',
   'src/ush.vala',
+  'src/portal_request.vala',
+  'src/consent.vala',
+  'src/shortcut_triggers.vala',
+  'src/global_shortcuts.vala',
+  'src/background.vala',
+  'src/toplevel_monitor.c',
+  'src/toplevel_monitor.vapi',
+  'src/usb.vala',
+  'src/remote_desktop.vala',
   'src/dbus_helper.c',
 )
 
 executable('xdg-desktop-portal-singularity',
-  sources: sources + [tl_proto_c, tl_proto_h, src_proto_c, src_proto_h, copy_proto_c, copy_proto_h],
+  sources: sources,
   include_directories: include_directories('src'),
   dependencies: [
+    sharing_host_dep,
+    gtk4_layer_shell_dep,
     gtk4_dep,
     gio_dep,
     gio_unix_dep,
     gee_dep,
     json_dep,
     gtk4_unix_print_dep,
+    gtk4_wayland_dep,
     wayland_client_dep,
     posix_dep,
     libsingularity_dep,
-    gtk4_layer_shell_dep,
     cc.find_library('m')
   ],
   c_args: pipewire_cflags,
   link_args: pipewire_libs,
-  vala_args: ['--pkg=gtk4-unix-print'],
+  vala_args: ['--pkg=gtk4-unix-print', '--pkg=gtk4-wayland', '--vapidir=' + meson.current_source_dir() / 'src', '--vapidir=' + sharing_host_vapidir, '--pkg=rd_wayland'],
   install: true,
   install_dir: get_option('libexecdir')
 )
@@ -149,6 +167,48 @@ executable('singularity-screencast-chooser',
   install_dir: get_option('libexecdir')
 )
 
+executable('singularity-portal-consent',
+  sources: files(
+    'src/consent.vala',
+    'src/consent_dialog.vala',
+    'src/consent_main.vala',
+  ),
+  dependencies: [
+    gtk4_dep,
+    gio_dep,
+    gio_unix_dep,
+    json_dep,
+    gtk4_layer_shell_dep,
+    libsingularity_dep,
+  ],
+  install: true,
+  install_dir: get_option('libexecdir')
+)
+
+privacy_portals_test = executable(
+  'test-privacy-portals',
+  sources: files(
+    'tests/test_privacy_portals.vala',
+    'src/portal_request.vala',
+    'src/consent.vala',
+    'src/shortcut_triggers.vala',
+    'src/global_shortcuts.vala',
+    'src/background.vala',
+    'src/toplevel_monitor.c',
+    'src/toplevel_monitor.vapi',
+    'src/usb.vala',
+    'src/access.vala',
+  ) + [tl_proto_c, tl_proto_h],
+  include_directories: include_directories('src'),
+  dependencies: [gio_dep, gio_unix_dep, json_dep, wayland_client_dep],
+)
+
+test(
+  'privacy-portals',
+  privacy_portals_test,
+  suite: 'privacy-unit',
+)
+
 screencast_contract_test = executable(
   'test-screencast-contract',
   sources: files(
@@ -164,6 +224,25 @@ screencast_contract_test = executable(
 test(
   'screencast-contract',
   screencast_contract_test,
+  suite: 'screencast-unit',
+)
+
+screen_recorder_test = executable(
+  'test-screen-recorder',
+  sources: files(
+    'tests/test_screen_recorder.vala',
+    'tests/screencast_backend_stub.c',
+    'src/screen_recorder.vala',
+    'src/screencast.vala',
+    'src/screencast_types.vala',
+  ),
+  include_directories: include_directories('src'),
+  dependencies: [gio_dep, json_dep],
+)
+
+test(
+  'screen-recorder',
+  screen_recorder_test,
   suite: 'screencast-unit',
 )
 

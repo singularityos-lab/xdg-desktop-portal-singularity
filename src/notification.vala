@@ -35,6 +35,13 @@ namespace Singularity.Portal {
             try {
                 var actions = new VariantBuilder(new VariantType("as"));
                 var hints = new VariantBuilder(new VariantType("a{sv}"));
+                if (app_id != "") hints.add("{sv}", "desktop-entry", new Variant.string(app_id));
+                var priority_v = notification.get("priority");
+                if (priority_v != null && priority_v.is_of_type(VariantType.STRING)) {
+                    string priority = priority_v.get_string();
+                    if (priority == "urgent") hints.add("{sv}", "urgency", new Variant.byte(2));
+                    else if (priority == "low") hints.add("{sv}", "urgency", new Variant.byte(0));
+                }
 
                 int32 timeout = -1;
                 _conn.call_sync(

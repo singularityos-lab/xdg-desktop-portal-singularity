@@ -189,7 +189,10 @@ namespace Singularity.Portal {
                 if (stdout_buffer == null)
                     return new ScreenCastChooserResult (
                         ScreenCastChooserStatus.CANCELLED);
-                string chosen = stdout_buffer.strip ();
+                string chosen = "";
+                foreach (unowned string line in stdout_buffer.strip ().split ("\n")) {
+                    if (line.strip ().has_prefix ("{")) chosen = line.strip ();
+                }
                 if (chosen == "")
                     return new ScreenCastChooserResult (
                         ScreenCastChooserStatus.CANCELLED);
@@ -241,6 +244,7 @@ namespace Singularity.Portal {
         public uint start_source_id = 0;
         public uint health_source_id = 0;
         public uint start_ticks = 0;
+        public uint focus_cookie = 0;
         public Cancellable? selection_cancellable;
         public Cancellable? start_cancellable;
     }
@@ -312,6 +316,11 @@ namespace Singularity.Portal {
         [DBus (name = "version")]
         public uint version { get { return 3u; } }
 
+        [DBus (visible = false)]
+        public ScreenCastCaptureManager capture_manager {
+            get { return _manager; }
+        }
+
         public ScreenCastPortal (GLib.Application? app = null) {
             _app = app;
             _manager = new NativeScreenCastCaptureManager ();
@@ -344,6 +353,28 @@ namespace Singularity.Portal {
         [DBus (visible = false)]
         public void register_on (DBusConnection connection) {
             _connection = connection;
+        }
+
+        [DBus (visible = false)]
+        public ScreenCastSession adopt_session (string session_handle) {
+            var state = new ScreenCastSessionState ();
+            var session = new ScreenCastSession (this, session_handle);
+            _states.insert (session_handle, state);
+            _sessions.insert (session_handle, session);
+            return session;
+        }
+
+        [DBus (visible = false)]
+        public bool has_sources (string session_handle) {
+            var state = _states.lookup (session_handle);
+            return state != null && !state.closed && state.source_id != "";
+        }
+
+        [DBus (visible = false)]
+        public string? monitor_source (string session_handle) {
+            var state = _states.lookup (session_handle);
+            if (state == null || state.closed || state.source_type != SCREENCAST_SOURCE_MONITOR) return null;
+            return state.source_id != "" ? state.source_id : null;
         }
 
         public async void create_session (
@@ -566,7 +597,39 @@ namespace Singularity.Portal {
             state.health_source_id = Timeout.add (250, () => {
                 return _watch_capture (session_path, state);
             });
+            _begin_presenting.begin (state, app_id);
             response = 0;
+        }
+
+        private async void _begin_presenting (ScreenCastSessionState state, string app_id) {
+            if (_connection == null)
+                return;
+            try {
+                var ret = yield _connection.call ("dev.sinty.Focus", "/dev/sinty/Focus", "dev.sinty.Focus1",
+                    "BeginPresenting", new Variant ("(s)", app_id != "" ? app_id : "screen-cast"),
+                    new VariantType ("(u)"), DBusCallFlags.NO_AUTO_START, 2000, null);
+                uint cookie = ret.get_child_value (0).get_uint32 ();
+                if (state.closed)
+                    _end_cookie (cookie);
+                else
+                    state.focus_cookie = cookie;
+            } catch (Error e) {
+                debug ("ScreenCastPortal: Focus is not available: %s", e.message);
+            }
+        }
+
+        private void _end_presenting (ScreenCastSessionState state) {
+            if (state.focus_cookie == 0)
+                return;
+            _end_cookie (state.focus_cookie);
+            state.focus_cookie = 0;
+        }
+
+        private void _end_cookie (uint cookie) {
+            if (_connection == null)
+                return;
+            _connection.call.begin ("dev.sinty.Focus", "/dev/sinty/Focus", "dev.sinty.Focus1",
+                "EndPresenting", new Variant ("(u)", cookie), null, DBusCallFlags.NO_AUTO_START, 2000, null);
         }
 
         [DBus (visible = false)]
@@ -593,6 +656,7 @@ namespace Singularity.Portal {
                 state.capture = null;
             }
             _fire_resume (ref state.start_resume);
+            _end_presenting (state);
 
             uint registration_id = _session_registration_ids.lookup (
                 session_handle);

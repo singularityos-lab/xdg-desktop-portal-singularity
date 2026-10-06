@@ -25,6 +25,53 @@ meson compile -C build
 meson install -C build
 ```
 
+## Permission prompts
+
+Access, Background, GlobalShortcuts, RemoteDesktop and Usb ask the user through
+`singularity-portal-consent`, a separate process installed next to the
+daemon. It reads one JSON request on stdin, shows a full screen layer-shell
+dialog and prints one JSON answer on stdout, so GTK never starts inside the
+portal daemon. The request is cancelled when the app closes the portal
+request.
+
+## Portal status
+
+| Interface | Status |
+| --- | --- |
+| Access | Consent dialog used by the Camera and Location portals of the frontend |
+| Lockdown | `disable-camera`, `disable-microphone` and `disable-location` follow the privacy switches in `dev.sinty.desktop` |
+| Background | App state from `ext-foreign-toplevel-list-v1`, background notice with Allow, This Time and Stop, autostart files |
+| GlobalShortcuts | Version 2; grants stored in `portal-global-shortcuts`, bound and triggered by the shell |
+| Usb | Device selection dialog, version 1 |
+| Clipboard | Version 1, only inside a RemoteDesktop session the user allowed to use the clipboard; uses `ext-data-control-v1` |
+| InputCapture | Not provided. It needs pointer barriers and an EIS server in the compositor |
+| RemoteDesktop | Version 2, keyboard and pointer through `zwlr_virtual_pointer_v1` and `zwp_virtual_keyboard_v1`, screen streams from the ScreenCast implementation, confirmation dialog for every session, `ConnectToEIS` and touch not provided |
+
+## For distributors
+
+- Install `singularity-portal-consent` in the same directory as the daemon,
+  or anywhere in `PATH`.
+- Background app state comes from the `ext-foreign-toplevel-list-v1`
+  Wayland protocol. On a compositor without it `GetAppState` fails, and the
+  frontend skips its background checks instead of asking about every app.
+- Location has no backend interface: the frontend talks to GeoClue directly
+  and uses this backend for the consent dialog and the Lockdown switch.
+- Settings, Privacy in the shell reads the same permission store the
+  frontend writes; see `docs/privacy.md` in libsingularity.
+- RemoteDesktop needs the compositor to offer
+  `zwlr_virtual_pointer_manager_v1` and `zwp_virtual_keyboard_manager_v1`;
+  without them `Start` fails. Keysyms are typed with the keymap of the
+  session, read from the seat; characters missing from it get a spare key.
+  Streams selected with `SelectSources` get the output's logical `position`
+  and `size`, and `NotifyPointerMotionAbsolute` maps stream coordinates onto
+  that output, also on scaled screens. The Wayland helpers are shared with
+  singularity-sharing through the sharing host library of libsingularity
+  (`docs/sharing-host.md`).
+- Active RemoteDesktop sessions are listed on
+  `/dev/sinty/portal/RemoteSessions` (`dev.sinty.portal.RemoteSessions`:
+  `ListSessions`, `StopSession`, `StopAll`, signal `Changed`); the shell uses
+  it for the screen sharing button in the top bar.
+
 ## License
 
 LGPL-2.1-only - see [LICENSE](LICENSE).

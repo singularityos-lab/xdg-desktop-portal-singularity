@@ -13,6 +13,7 @@ src/notification.vala
 src/open_uri.vala
 src/print.vala
 src/screencast.vala
+src/remote_desktop.vala
 src/screencast_source_picker.vala
 src/screenshot.vala
 src/settings.vala
