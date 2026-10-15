@@ -23,7 +23,7 @@ namespace Singularity.Portal {
             out HashTable<string, Variant> results
         ) throws Error {
             results = new HashTable<string, Variant>(str_hash, str_equal);
-            response = yield _run_picker(
+            response = yield _run_picker(parent_window,
                 title != "" ? title : "Open File",
                 _get_bool_option(options, "multiple"),
                 false,
@@ -46,7 +46,7 @@ namespace Singularity.Portal {
             out HashTable<string, Variant> results
         ) throws Error {
             results = new HashTable<string, Variant>(str_hash, str_equal);
-            response = yield _run_picker(
+            response = yield _run_picker(parent_window,
                 title != "" ? title : "Save File",
                 false,
                 true,
@@ -69,7 +69,7 @@ namespace Singularity.Portal {
             out HashTable<string, Variant> results
         ) throws Error {
             results = new HashTable<string, Variant>(str_hash, str_equal);
-            response = yield _run_picker(
+            response = yield _run_picker(parent_window,
                 title != "" ? title : "Save Files",
                 false,
                 true,
@@ -101,6 +101,7 @@ namespace Singularity.Portal {
         }
 
         private async uint32 _run_picker(
+            string parent_window,
             string title,
             bool multiple,
             bool save_mode,
@@ -159,6 +160,9 @@ namespace Singularity.Portal {
                 }
                 if (accept_label != null) {
                     argv += "--accept-label=" + accept_label;
+                }
+                if (parent_window != "") {
+                    argv += "--parent=" + parent_window;
                 }
 
                 var launcher = new SubprocessLauncher(
