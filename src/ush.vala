@@ -14,12 +14,14 @@ namespace Singularity.Portal {
      */
     [DBus (name = "io.github.singularityos_lab.ush.Portal1")]
     public class UshPortal : Object {
+        private const int PROMPT_TIMEOUT_MS = 300000;
 
         public async void show_permission(string category, string resource, string reason, out string decision) throws Error {
             try {
-                var shell = Bus.get_proxy_sync<Singularity.Shell.ShellService>(
+                var shell = yield Bus.get_proxy<Singularity.Shell.ShellService>(
                     BusType.SESSION, "dev.sinty.desktop", "/dev/sinty/Shell");
-                decision = shell.show_permission(category, resource, reason);
+                ((DBusProxy) shell).set_default_timeout(PROMPT_TIMEOUT_MS);
+                decision = yield shell.show_permission(category, resource, reason);
             } catch (Error e) {
                 warning("ush portal: failed to call desktop shell: %s", e.message);
                 decision = "deny";
@@ -28,9 +30,10 @@ namespace Singularity.Portal {
 
         public async void show_confirm(string title, string body, out bool confirmed) throws Error {
             try {
-                var shell = Bus.get_proxy_sync<Singularity.Shell.ShellService>(
+                var shell = yield Bus.get_proxy<Singularity.Shell.ShellService>(
                     BusType.SESSION, "dev.sinty.desktop", "/dev/sinty/Shell");
-                confirmed = shell.show_confirm(title, body);
+                ((DBusProxy) shell).set_default_timeout(PROMPT_TIMEOUT_MS);
+                confirmed = yield shell.show_confirm(title, body);
             } catch (Error e) {
                 warning("ush portal: show_confirm failed: %s", e.message);
                 confirmed = false;
