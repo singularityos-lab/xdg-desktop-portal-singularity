@@ -40,6 +40,23 @@ namespace Singularity.Portal {
             }
         }
 
+        public async void show_choice(string title, string body, string allow_label, string block_label, out bool allowed) throws Error {
+            try {
+                var conn = yield Bus.get(BusType.SESSION);
+                var reply = yield conn.call("dev.sinty.desktop", "/dev/sinty/Shell/Choice",
+                    "dev.sinty.Shell.Choice", "ShowChoice",
+                    new Variant("(ssss)", title, body, allow_label, block_label),
+                    new VariantType("(b)"), DBusCallFlags.NONE, PROMPT_TIMEOUT_MS);
+                reply.get("(b)", out allowed);
+                return;
+            } catch (Error e) {
+                warning("ush portal: show_choice unavailable, using show_confirm: %s", e.message);
+            }
+            bool confirmed = false;
+            yield show_confirm(title, body + "\n\n" + allow_label + ": Confirm", out confirmed);
+            allowed = confirmed;
+        }
+
         /**
          * Grant blanket permission for an app (all categories).
          * Delegates to the USH broker D-Bus interface.
