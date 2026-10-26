@@ -3,7 +3,7 @@ using GLib;
 namespace Singularity.Portal {
 
     /**
-     * Implements io.github.singularityos_lab.ush.Portal1.
+     * Implements dev.sinty.ush.Portal1.
      *
      * Delegates permission dialogs to the Singularity desktop shell
      * (dev.sinty.desktop) which owns the GDK/Wayland display and can
@@ -12,7 +12,7 @@ namespace Singularity.Portal {
      * Also exposes AllowApp/DenyApp/IsAppTrusted methods mirroring
      * the Broker D-Bus interface so the shell can directly trust apps.
      */
-    [DBus (name = "io.github.singularityos_lab.ush.Portal1")]
+    [DBus (name = "dev.sinty.ush.Portal1")]
     public class UshPortal : Object {
         private const int PROMPT_TIMEOUT_MS = 300000;
 
@@ -64,8 +64,8 @@ namespace Singularity.Portal {
         public void allow_app(string app_name) throws Error {
             try {
                 var broker = Bus.get_proxy_sync<Singularity.Portal.Broker1>(
-                    BusType.SESSION, "io.github.singularityos_lab.ush.Broker",
-                    "/io/github/singularityos_lab/ush/Broker");
+                    BusType.SESSION, "dev.sinty.ush.Broker",
+                    "/dev/sinty/ush/Broker");
                 broker.allow_app(app_name);
             } catch (Error e) {
                 warning("ush portal: allow_app failed: %s", e.message);
@@ -79,8 +79,8 @@ namespace Singularity.Portal {
         public void deny_app(string app_name) throws Error {
             try {
                 var broker = Bus.get_proxy_sync<Singularity.Portal.Broker1>(
-                    BusType.SESSION, "io.github.singularityos_lab.ush.Broker",
-                    "/io/github/singularityos_lab/ush/Broker");
+                    BusType.SESSION, "dev.sinty.ush.Broker",
+                    "/dev/sinty/ush/Broker");
                 broker.deny_app(app_name);
             } catch (Error e) {
                 warning("ush portal: deny_app failed: %s", e.message);
@@ -94,8 +94,8 @@ namespace Singularity.Portal {
         public bool is_app_trusted(string app_name) throws DBusError, IOError {
             try {
                 var broker = Bus.get_proxy_sync<Singularity.Portal.Broker1>(
-                    BusType.SESSION, "io.github.singularityos_lab.ush.Broker",
-                    "/io/github/singularityos_lab/ush/Broker");
+                    BusType.SESSION, "dev.sinty.ush.Broker",
+                    "/dev/sinty/ush/Broker");
                 return broker.is_app_trusted(app_name);
             } catch (Error e) {
                 warning("ush portal: is_app_trusted failed: %s", e.message);
@@ -107,7 +107,7 @@ namespace Singularity.Portal {
     /**
      * D-Bus proxy for the USH Broker interface.
      */
-    [DBus (name = "io.github.singularityos_lab.ush.Broker1")]
+    [DBus (name = "dev.sinty.ush.Broker1")]
     public interface Broker1 : Object {
         public abstract void allow_app(string app_name) throws IOError;
         public abstract void deny_app(string app_name) throws IOError;
